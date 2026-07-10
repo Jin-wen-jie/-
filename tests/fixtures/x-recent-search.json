@@ -1,0 +1,19 @@
+{
+  "data": [
+    {
+      "id": "42",
+      "text": "We have GPT Plus accounts in stock! Check it out: https://shop.example/gpt-plus",
+      "entities": {
+        "urls": [
+          {
+            "expanded_url": "https://shop.example/gpt-plus"
+          }
+        ]
+      }
+    }
+  ],
+  "meta": {
+    "newest_id": "42",
+    "result_count": 1
+  }
+}
