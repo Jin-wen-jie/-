@@ -1,6 +1,7 @@
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
-import { SESSION_COOKIE } from "@/lib/auth.js";
+
+const SESSION_COOKIE = "__Host-admin_session";
 
 export async function POST() {
   const cookieStore = await cookies();
