@@ -1,0 +1,21 @@
+{
+  "name": "ai-price-intelligence",
+  "private": true,
+  "packageManager": "pnpm@10.28.2",
+  "scripts": {
+    "build": "pnpm -r build",
+    "dev": "pnpm --parallel --filter @compare/web --filter @compare/worker --filter @compare/validator dev",
+    "lint": "pnpm -r lint",
+    "test": "vitest run",
+    "test:e2e": "playwright test",
+    "typecheck": "pnpm -r typecheck",
+    "db:generate": "pnpm --filter @compare/db db:generate",
+    "db:migrate": "pnpm --filter @compare/db db:migrate"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.61.1",
+    "tsx": "4.20.6",
+    "typescript": "7.0.2",
+    "vitest": "4.1.10"
+  }
+}
