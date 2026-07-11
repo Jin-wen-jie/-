@@ -2,18 +2,30 @@
 
 :root {
   --background: #ffffff;
-  --foreground: #171717;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+  --foreground: #111827;
 }
 
 body {
   color: var(--foreground);
   background: var(--background);
   font-family: system-ui, -apple-system, sans-serif;
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+/* Ensure all table text is readable */
+table {
+  color: #1f2937;
+}
+
+td, th {
+  color: #1f2937;
+}
+
+/* Links always visible */
+a {
+  color: #2563eb;
+}
+a:hover {
+  color: #1d4ed8;
 }
