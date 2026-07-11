@@ -3,23 +3,30 @@ import { z } from "zod";
 
 const createSchema = z.object({ productUrl: z.string().url() });
 
+// 演示数据模拟从公开来源发现的第三方 AI 商品线索
+// 每个候选都对应一个可公开访问的第三方页面（非官方直营）
 const demoCandidates: Array<{
   id: string; productUrl: string; sourceType: "manual" | "x" | "telegram";
   status: string; title: string | null; price: string | null;
   merchantName: string | null; sourceUrl: string | null; merchantUrl: string | null; createdAt: string;
 }> = [
-  { id: "c-1", productUrl: "https://openai.com/chatgpt/pricing/", sourceType: "x", status: "REVIEW_REQUIRED", title: "ChatGPT Plus 月费订阅", price: "$20.00/月", merchantName: "OpenAI", sourceUrl: "https://x.com/OpenAI/status/1812345678901234567", merchantUrl: "https://openai.com", createdAt: "2026-07-11T10:00:00Z" },
-  { id: "c-2", productUrl: "https://www.anthropic.com/pricing", sourceType: "telegram", status: "REVIEW_REQUIRED", title: "Claude Pro 月费计划", price: "$20.00/月", merchantName: "Anthropic", sourceUrl: "https://t.me/anthropic_claude/42", merchantUrl: "https://www.anthropic.com", createdAt: "2026-07-11T09:30:00Z" },
-  { id: "c-3", productUrl: "https://ai.google.dev/pricing", sourceType: "x", status: "DISCOVERED", title: "Gemini Advanced 订阅", price: "$19.99/月", merchantName: "Google AI", sourceUrl: "https://x.com/GoogleAI/status/1823456789012345678", merchantUrl: "https://ai.google.dev", createdAt: "2026-07-11T09:00:00Z" },
-  { id: "c-4", productUrl: "https://perplexity.ai/pro", sourceType: "telegram", status: "APPROVED", title: "Perplexity Pro 年度订阅", price: "$200.00/年", merchantName: "Perplexity", sourceUrl: "https://t.me/perplexity_ai/88", merchantUrl: "https://www.perplexity.ai", createdAt: "2026-07-11T08:30:00Z" },
-  { id: "c-5", productUrl: "https://deepseek.ai/pricing", sourceType: "x", status: "VALIDATING", title: null, price: null, merchantName: "DeepSeek", sourceUrl: "https://x.com/deepseek_ai/status/1834567890123456789", merchantUrl: null, createdAt: "2026-07-11T08:00:00Z" },
-  { id: "c-6", productUrl: "https://x.ai/grok", sourceType: "telegram", status: "REJECTED", title: "Grok Premium 月费", price: "$16.00/月", merchantName: "xAI", sourceUrl: "https://t.me/grok_community/23", merchantUrl: null, createdAt: "2026-07-11T07:00:00Z" },
-  { id: "c-7", productUrl: "https://openai.com/api/pricing/", sourceType: "x", status: "APPROVED", title: "OpenAI API 额度充值", price: "按量计费", merchantName: "OpenAI API", sourceUrl: "https://x.com/OpenAIDevs/status/1845678901234567890", merchantUrl: "https://platform.openai.com", createdAt: "2026-07-11T06:30:00Z" },
-  { id: "c-8", productUrl: "https://platform.openai.com/docs/guides/rate-limits", sourceType: "telegram", status: "REVIEW_REQUIRED", title: "GPT-4 API 访问权限", price: "Tier 定价", merchantName: "OpenAI Platform", sourceUrl: "https://t.me/openai_dev/101", merchantUrl: "https://platform.openai.com", createdAt: "2026-07-11T06:00:00Z" },
-  { id: "c-9", productUrl: "https://mistral.ai/pricing/", sourceType: "x", status: "DISCOVERED", title: "Mistral API 按量付费", price: "€0.002/1K tokens", merchantName: "Mistral AI", sourceUrl: "https://x.com/MistralAI/status/1856789012345678901", merchantUrl: null, createdAt: "2026-07-11T05:00:00Z" },
-  { id: "c-10", productUrl: "https://cohere.com/pricing", sourceType: "telegram", status: "VALIDATING", title: null, price: null, merchantName: null, sourceUrl: "https://t.me/cohere_dev/56", merchantUrl: null, createdAt: "2026-07-11T04:00:00Z" },
-  { id: "c-11", productUrl: "https://replicate.com/pricing", sourceType: "manual", status: "REVIEW_REQUIRED", title: "Replicate AI 模型托管", price: "按 GPU 时间", merchantName: "Replicate", sourceUrl: null, merchantUrl: null, createdAt: "2026-07-10T22:00:00Z" },
-  { id: "c-12", productUrl: "https://huggingface.co/pricing", sourceType: "x", status: "RETRY_WAIT", title: "HuggingFace Pro 订阅", price: "$9.00/月", merchantName: "HuggingFace", sourceUrl: "https://x.com/huggingface/status/1867890123456789012", merchantUrl: "https://huggingface.co", createdAt: "2026-07-10T20:00:00Z" },
+  // ── 从 X (Twitter) 公开帖子发现的第三方卖家 ──
+  { id: "c-x1", productUrl: "https://www.futurepedia.io/", sourceType: "x", status: "REVIEW_REQUIRED", title: "AI 工具聚合目录 - 收录 3000+ AI 产品", price: "免费/付费混合", merchantName: "Futurepedia", sourceUrl: "https://x.com/futurepedia_io/status/1812000000000000001", merchantUrl: "https://www.futurepedia.io", createdAt: "2026-07-11T10:00:00Z" },
+  { id: "c-x2", productUrl: "https://github.com/steven2358/awesome-generative-ai", sourceType: "x", status: "APPROVED", title: "Awesome Generative AI - 开源 AI 产品合集", price: "免费", merchantName: "GitHub 社区", sourceUrl: "https://x.com/steven2358/status/1823000000000000002", merchantUrl: "https://github.com/steven2358", createdAt: "2026-07-11T09:00:00Z" },
+  { id: "c-x3", productUrl: "https://theresanaiforthat.com/", sourceType: "x", status: "DISCOVERED", title: "There's An AI For That - AI 工具搜索引擎", price: "免费", merchantName: "TAAIFT", sourceUrl: "https://x.com/theresanaifor/status/1834000000000000003", merchantUrl: "https://theresanaiforthat.com", createdAt: "2026-07-11T08:00:00Z" },
+  { id: "c-x4", productUrl: "https://openai.com/chatgpt/pricing/", sourceType: "x", status: "REVIEW_REQUIRED", title: "X 帖提及: ChatGPT Plus 账号转售 $15/月", price: "$15.00/月 (第三方)", merchantName: "未知卖家 (X)", sourceUrl: "https://x.com/search?q=chatgpt%20plus%20account%20sell&src=typed_query", merchantUrl: null, createdAt: "2026-07-11T07:00:00Z" },
+
+  // ── 从 Telegram 公共频道发现的第三方卖家 ──
+  { id: "c-t1", productUrl: "https://www.futuretools.io/", sourceType: "telegram", status: "REVIEW_REQUIRED", title: "FutureTools - AI 工具导航与评测", price: "免费", merchantName: "FutureTools", sourceUrl: "https://t.me/futuretools", merchantUrl: "https://www.futuretools.io", createdAt: "2026-07-11T08:30:00Z" },
+  { id: "c-t2", productUrl: "https://www.anthropic.com/pricing", sourceType: "telegram", status: "REVIEW_REQUIRED", title: "TG 频道分享: Claude Pro 共享车位 $12/月", price: "$12.00/月 (第三方)", merchantName: "TG 共享频道", sourceUrl: "https://t.me/s/ai_accounts_share", merchantUrl: null, createdAt: "2026-07-11T07:30:00Z" },
+  { id: "c-t3", productUrl: "https://www.producthunt.com/topics/artificial-intelligence", sourceType: "telegram", status: "DISCOVERED", title: "ProductHunt AI 专区 - 每日新 AI 产品", price: "免费", merchantName: "ProductHunt", sourceUrl: "https://t.me/producthunt", merchantUrl: "https://www.producthunt.com", createdAt: "2026-07-11T06:30:00Z" },
+  { id: "c-t4", productUrl: "https://deepseek.ai/pricing", sourceType: "telegram", status: "VALIDATING", title: null, price: null, merchantName: "TG 代充商家", sourceUrl: "https://t.me/s/deepseek_topup", merchantUrl: null, createdAt: "2026-07-11T05:30:00Z" },
+
+  // ── 手工补链的第三方来源 ──
+  { id: "c-m1", productUrl: "https://www.toolify.ai/", sourceType: "manual", status: "APPROVED", title: "Toolify - AI 工具目录与比价", price: "免费", merchantName: "Toolify", sourceUrl: null, merchantUrl: "https://www.toolify.ai", createdAt: "2026-07-10T22:00:00Z" },
+  { id: "c-m2", productUrl: "https://saasaitools.com/", sourceType: "manual", status: "REVIEW_REQUIRED", title: "SaaS AI Tools - AI SaaS 产品列表", price: "免费", merchantName: "SaaS AI Tools", sourceUrl: null, merchantUrl: "https://saasaitools.com", createdAt: "2026-07-10T21:00:00Z" },
+  { id: "c-m3", productUrl: "https://x.ai/grok", sourceType: "manual", status: "REJECTED", title: "Grok 订阅 - 无法确认第三方转售", price: "$16.00/月", merchantName: "待核实", sourceUrl: null, merchantUrl: null, createdAt: "2026-07-10T20:00:00Z" },
+  { id: "c-m4", productUrl: "https://mistral.ai/pricing/", sourceType: "manual", status: "RETRY_WAIT", title: "Mistral API 额度 - 第三方代充疑似链接失效", price: "待验证", merchantName: "待核实", sourceUrl: null, merchantUrl: null, createdAt: "2026-07-10T19:00:00Z" },
 ];
 
 export async function GET() {
