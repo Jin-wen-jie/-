@@ -1,5 +1,13 @@
 import * as cheerio from "cheerio";
 
+/**
+ * 已知的发卡平台域名列表。
+ * 当抓取这些域名下的页面时，会额外提取同平台其他店铺链接。
+ */
+const KNOWN_PLATFORMS: string[] = [
+  "ldxp.cn",
+];
+
 export interface ExtractedProduct {
   title: string | null;
   price: string | null;
@@ -9,6 +17,8 @@ export interface ExtractedProduct {
   stockQuantity: number | null;
   buyAction: boolean;
   pageFingerprint: string;
+  /** 同平台发现的其它店铺链接（去重后） */
+  platformLinks: string[];
   confidence: {
     title: number;
     price: number;
@@ -26,20 +36,23 @@ export function extractProduct(
 ): ExtractedProduct {
   const $ = cheerio.load(html);
 
+  // Extract platform links from page (known card platforms)
+  const platformLinks = extractPlatformLinks($, pageUrl);
+
   // 1. Try JSON-LD
   const jsonLd = tryJsonLd($);
   if (jsonLd) {
-    return jsonLd;
+    return { ...jsonLd, platformLinks };
   }
 
   // 2. Try OpenGraph
   const og = tryOpenGraph($);
   if (og.title || og.price) {
-    return og;
+    return { ...og, platformLinks };
   }
 
   // 3. Fallback to visible DOM
-  return tryDom($, pageUrl);
+  return { ...tryDom($, pageUrl), platformLinks };
 }
 
 function tryJsonLd($: cheerio.CheerioAPI): ExtractedProduct | null {
@@ -177,6 +190,49 @@ function buildResult(
         availability !== "UNKNOWN" ? baseConfidence : 0.1,
     },
   };
+}
+
+/**
+ * 从页面中提取同平台其它店铺的链接。
+ * 只提取已知发卡平台域名下的 /shop/ 路径链接，自动去重。
+ */
+function extractPlatformLinks(
+  $: cheerio.CheerioAPI,
+  pageUrl: string,
+): string[] {
+  const seen = new Set<string>();
+  const links: string[] = [];
+
+  $("a[href]").each((_, el) => {
+    const href = $(el).attr("href");
+    if (!href) return;
+
+    try {
+      const resolved = new URL(href, pageUrl);
+
+      // 只关注已知平台域名
+      if (!KNOWN_PLATFORMS.some((p) => resolved.hostname.endsWith(p))) return;
+
+      // 只关注 /shop/ 路径（发卡平台的店铺页）
+      if (!resolved.pathname.startsWith("/shop/")) return;
+
+      // 去掉 fragment 后的规范化 URL
+      resolved.hash = "";
+      const canonical = resolved.toString();
+
+      // 跳过当前页面自身
+      if (canonical === new URL(pageUrl).href) return;
+
+      if (!seen.has(canonical)) {
+        seen.add(canonical);
+        links.push(canonical);
+      }
+    } catch {
+      // 忽略无法解析的链接
+    }
+  });
+
+  return links;
 }
 
 function hashString(s: string): string {

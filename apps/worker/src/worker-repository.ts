@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   asc,
   createDb,
@@ -173,6 +173,33 @@ export function createWorkerRepositoryFromDb(db: Db): WorkerRepository {
       return listing ?? null;
     },
 
+    async saveDiscoveredPlatformLinks(links) {
+      let inserted = 0;
+      const now = new Date();
+      for (const url of links) {
+        const canonicalUrl = canonicalizeUrl(url);
+        const urlFingerprint = fingerprintUrl(canonicalUrl);
+        const [existing] = await db
+          .select({ id: discoveryCandidates.id })
+          .from(discoveryCandidates)
+          .where(eq(discoveryCandidates.urlFingerprint, urlFingerprint))
+          .limit(1);
+        if (existing) continue;
+        await db.insert(discoveryCandidates).values({
+          id: randomUUID(),
+          productUrl: canonicalUrl,
+          canonicalUrl,
+          urlFingerprint,
+          sourceType: "manual",
+          status: "DISCOVERED",
+          createdAt: now,
+          updatedAt: now,
+        });
+        inserted++;
+      }
+      return inserted;
+    },
+
     async saveListingRevalidation(id, result) {
       const checkedAt = new Date();
       await db.transaction(async (tx) => {
@@ -274,4 +301,17 @@ function redactQueryStrings(message: string): string {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function canonicalizeUrl(productUrl: string): string {
+  const url = new URL(productUrl);
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new Error("UNSUPPORTED_URL_PROTOCOL");
+  }
+  url.hash = "";
+  return url.toString();
+}
+
+function fingerprintUrl(canonicalUrl: string): string {
+  return createHash("sha256").update(canonicalUrl).digest("hex");
 }

@@ -13,6 +13,8 @@ export interface ValidatorResponse {
     stockQuantity: number | null;
     buyAction: boolean;
     pageFingerprint: string;
+    /** 同平台发现的其它店铺链接 */
+    platformLinks: string[];
     confidence: {
       title: number;
       price: number;
