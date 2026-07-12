@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  canNormalizeCandidateStatus,
   fingerprintCandidateUrl,
   toCandidateView,
 } from "./candidate-service.js";
@@ -66,5 +67,16 @@ describe("candidate service", () => {
     expect(fingerprintCandidateUrl("https://example.com/item?id=8")).not.toBe(
       fingerprintCandidateUrl("https://example.com/item?id=9"),
     );
+  });
+
+  it.each([
+    ["DISCOVERED", true],
+    ["REVIEW_REQUIRED", true],
+    ["VALIDATING", false],
+    ["RETRY_WAIT", false],
+    ["APPROVED", false],
+    ["REJECTED", false],
+  ])("allows normalization for %s: %s", (status, expected) => {
+    expect(canNormalizeCandidateStatus(status)).toBe(expected);
   });
 });

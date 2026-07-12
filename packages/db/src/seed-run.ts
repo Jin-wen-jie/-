@@ -1,7 +1,9 @@
 #!/usr/bin/env tsx
+/* eslint-disable no-console */
 import { createDb } from "./client";
 import { seedWatchSources } from "./seed-watch-sources";
 import { seedCandidates } from "./seed-candidates";
+import { seedSpecs } from "./seed-specs";
 
 const databaseUrl = process.env.DATABASE_URL;
 if (!databaseUrl) {
@@ -15,8 +17,11 @@ try {
   await seedWatchSources(db);
   console.log("✓ Watch sources seeded");
 
-  await seedCandidates(db);
-  console.log("✓ Initial candidates seeded");
+	await seedCandidates(db);
+	console.log("✓ Initial candidates seeded");
+
+	await seedSpecs(db);
+	console.log("✓ Product specs seeded");
 } catch (error) {
   console.error("× Seed failed:", error);
   process.exit(1);

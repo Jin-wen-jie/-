@@ -64,6 +64,10 @@ export function fingerprintCandidateUrl(productUrl: string): string {
     .digest("hex");
 }
 
+export function canNormalizeCandidateStatus(status: string): boolean {
+  return status === "DISCOVERED" || status === "REVIEW_REQUIRED";
+}
+
 export function toCandidateView(input: CandidateViewInput): CandidateView {
   const extraction = extractionSchema.safeParse(input.extractionResult);
   const data = extraction.success ? extraction.data : {};

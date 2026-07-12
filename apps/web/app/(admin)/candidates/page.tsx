@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { DataTable } from "../../../components/data-table";
 import { ExternalLink } from "../../../components/external-link";
 import { StatusBadge } from "../../../components/status-badge";
+import SpecNormalizer from "../../../components/spec-normalizer";
 import type { Column } from "../../../components/data-table";
 
 interface Candidate {
@@ -32,6 +33,7 @@ export default function CandidatesPage() {
   const [newUrl, setNewUrl] = useState("");
   const [adding, setAdding] = useState(false);
   const [error, setError] = useState("");
+  const [normalizingCandidate, setNormalizingCandidate] = useState<Candidate | null>(null);
 
   async function fetchCandidates() {
     setLoading(true);
@@ -101,7 +103,7 @@ export default function CandidatesPage() {
     { key: "product", header: "商品页", render: (r) => <ExternalLink href={r.productUrl}>商品页</ExternalLink> },
     { key: "source", header: "发现帖", render: (r) => r.sourceUrl ? <ExternalLink href={r.sourceUrl}>来源帖</ExternalLink> : <span className="text-gray-400">手工录入</span> },
     { key: "merchantLink", header: "店铺", render: (r) => r.merchantUrl ? <ExternalLink href={r.merchantUrl}>店铺</ExternalLink> : <span className="text-gray-400">—</span> },
-    { key: "actions", header: "操作", render: (r) => (r.status === "REVIEW_REQUIRED" || r.status === "DISCOVERED") ? <div className="flex gap-1.5"><button onClick={() => handleReview(r.id, "approve")} disabled={!r.canApprove} title={r.canApprove ? "通过审核" : "需先完成规格归一化"} className="rounded bg-green-600 px-2.5 py-1 text-xs font-semibold text-white hover:bg-green-700 disabled:cursor-not-allowed disabled:bg-gray-300">通过</button><button onClick={() => handleReview(r.id, "reject")} className="rounded bg-red-600 px-2.5 py-1 text-xs font-semibold text-white hover:bg-red-700">驳回</button></div> : null },
+    { key: "actions", header: "操作", render: (r) => (r.status === "REVIEW_REQUIRED" || r.status === "DISCOVERED") ? <div className="flex gap-1.5">{!r.canApprove && <button onClick={() => setNormalizingCandidate(r)} className="rounded bg-blue-600 px-2.5 py-1 text-xs font-semibold text-white hover:bg-blue-700">规格归一化</button>}<button onClick={() => handleReview(r.id, "approve")} disabled={!r.canApprove} title={r.canApprove ? "通过审核" : "需先完成规格归一化"} className="rounded bg-green-600 px-2.5 py-1 text-xs font-semibold text-white hover:bg-green-700 disabled:cursor-not-allowed disabled:bg-gray-300">通过</button><button onClick={() => handleReview(r.id, "reject")} className="rounded bg-red-600 px-2.5 py-1 text-xs font-semibold text-white hover:bg-red-700">驳回</button></div> : null },
   ];
 
   return (
@@ -115,6 +117,16 @@ export default function CandidatesPage() {
       </div>
       {error && <div className="mb-4 border-l-4 border-red-500 bg-red-50 px-4 py-3 text-sm font-medium text-red-800">{error}</div>}
       {loading ? <p className="text-gray-600">加载中…</p> : <DataTable columns={cols} rows={candidates} getRowKey={(r) => r.id} />}
+      {normalizingCandidate && (
+        <SpecNormalizer
+          candidate={normalizingCandidate}
+          onClose={() => setNormalizingCandidate(null)}
+          onNormalized={() => {
+            setNormalizingCandidate(null);
+            fetchCandidates();
+          }}
+        />
+      )}
     </div>
   );
 }

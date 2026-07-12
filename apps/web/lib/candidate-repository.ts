@@ -1,11 +1,13 @@
 import { randomUUID } from "node:crypto";
-import { desc, eq } from "drizzle-orm";
+import { and, desc, eq, inArray } from "drizzle-orm";
 import {
   auditEvents,
   discoveryCandidates,
   discoveryEvents,
+  productSpecs,
 } from "@compare/db";
 import {
+  canNormalizeCandidateStatus,
   canonicalizeCandidateUrl,
   fingerprintCandidateUrl,
   toCandidateView,
@@ -155,3 +157,102 @@ export async function reviewCandidate(
     };
   });
 }
+
+export interface SpecInfo {
+  id: string;
+  provider: string;
+  productLine: string;
+  plan: string;
+  delivery: string;
+  accessMode: string;
+  ownership: string;
+  region: string;
+  qualification: string;
+  validity: string;
+  commitment: string;
+  quota: string;
+  comparisonKey: string;
+}
+
+export type NormalizeCandidateResult =
+  | {
+      ok: false;
+      reason: "NOT_FOUND" | "SPEC_NOT_FOUND" | "INVALID_STATUS";
+    }
+  | {
+      ok: true;
+      id: string;
+      specId: string;
+      comparisonKey: string;
+      normalizedAt: string;
+    };
+
+/**
+ * 规格归一化：为候选关联一个商品规格。
+ * 在事务中设置 comparisonKey 和 specId，并写入审计事件。
+ */
+export async function normalizeCandidate(
+  id: string,
+  specId: string,
+): Promise<NormalizeCandidateResult> {
+  const db = getDatabase();
+  return db.transaction(async (tx) => {
+    const [candidate] = await tx
+      .select({
+        id: discoveryCandidates.id,
+        status: discoveryCandidates.status,
+      })
+      .from(discoveryCandidates)
+      .where(eq(discoveryCandidates.id, id))
+      .limit(1);
+    if (!candidate) return { ok: false, reason: "NOT_FOUND" };
+    if (!canNormalizeCandidateStatus(candidate.status)) {
+      return { ok: false, reason: "INVALID_STATUS" };
+    }
+
+    const [spec] = await tx
+      .select({ comparisonKey: productSpecs.comparisonKey })
+      .from(productSpecs)
+      .where(eq(productSpecs.id, specId))
+      .limit(1);
+    if (!spec) return { ok: false, reason: "SPEC_NOT_FOUND" };
+
+    const normalizedAt = new Date();
+    const [updated] = await tx
+      .update(discoveryCandidates)
+      .set({
+        comparisonKey: spec.comparisonKey,
+        specId,
+        updatedAt: normalizedAt,
+      })
+      .where(
+        and(
+          eq(discoveryCandidates.id, id),
+          inArray(discoveryCandidates.status, [
+            "DISCOVERED",
+            "REVIEW_REQUIRED",
+          ]),
+        ),
+      )
+      .returning({ id: discoveryCandidates.id });
+    if (!updated) return { ok: false, reason: "INVALID_STATUS" };
+
+    await tx.insert(auditEvents).values({
+      id: randomUUID(),
+      action: "candidate.normalize",
+      candidateId: id,
+      specId,
+      detail: { comparisonKey: spec.comparisonKey },
+      createdAt: normalizedAt,
+    });
+
+    return {
+      ok: true,
+      id,
+      specId,
+      comparisonKey: spec.comparisonKey,
+      normalizedAt: normalizedAt.toISOString(),
+    };
+  });
+}
+

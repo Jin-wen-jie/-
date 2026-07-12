@@ -21,3 +21,4 @@ export {
 } from "./bootstrap-admin";
 export { seedWatchSources, INITIAL_WATCH_SOURCES } from "./seed-watch-sources";
 export { seedCandidates, INITIAL_CANDIDATES, KNOWN_PLATFORMS } from "./seed-candidates";
+export { seedSpecs, INITIAL_SPECS, buildComparisonKey } from "./seed-specs";
