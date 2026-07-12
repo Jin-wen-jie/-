@@ -1,31 +1,5 @@
 import { describe, expect, it } from "vitest";
-
-export function connectorLabel(status: string): string {
-  switch (status) {
-    case "AUTH_DISABLED":
-      return "鉴权失败，连接器已停用";
-    case "NOT_CONFIGURED":
-      return "未配置";
-    case "RATE_LIMITED":
-      return "触发频率限制";
-    case "ACTIVE":
-      return "运行中";
-    case "ERROR":
-      return "运行错误";
-    default:
-      return status;
-  }
-}
-
-export function canAccessAdminPage(
-  ctx: { forcePasswordChange: boolean },
-  pathname: string,
-): boolean {
-  if (ctx.forcePasswordChange && !pathname.startsWith("/settings")) {
-    return false;
-  }
-  return true;
-}
+import { canAccessAdminPage, connectorLabel } from "./view-models.js";
 
 describe("settings views", () => {
   it("does not present auth failure as no data", () => {
@@ -47,5 +21,11 @@ describe("settings views", () => {
         "/settings",
       ),
     ).toBe(true);
+    expect(
+      canAccessAdminPage(
+        { forcePasswordChange: true },
+        "/settings-evil",
+      ),
+    ).toBe(false);
   });
 });

@@ -1,6 +1,6 @@
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
-import * as schema from "./schema.js";
+import * as schema from "./schema";
 
 export function createDb(databaseUrl: string) {
   const client = postgres(databaseUrl, { max: 10 });
@@ -12,4 +12,10 @@ export type Transaction = Parameters<
   Parameters<Db["transaction"]>[0]
 >[0];
 
-export * from "./schema.js";
+export * from "./schema";
+export { asc, eq, inArray } from "drizzle-orm";
+export {
+  bootstrapAdmin,
+  hashPassword,
+  verifyPassword,
+} from "./bootstrap-admin";

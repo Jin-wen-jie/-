@@ -9,7 +9,7 @@
 - **PostgreSQL 17** + Drizzle ORM
 - **pg-boss** 持久任务队列
 - Node.js worker + Fastify validator
-- Docker Compose 部署
+- Windows 本机 PostgreSQL 开发，Docker Compose 仅用于可选服务器部署
 
 ## 项目结构
 
@@ -33,28 +33,48 @@ tests/
 
 - Node.js 24+
 - pnpm 10.28+
-- Docker Desktop（或 Docker Engine + Docker Compose）
+- Windows 本机 PostgreSQL 17+（无需 Docker Desktop）
 
-### 1. 启动基础设施
+### 1. 确认 PostgreSQL 服务
 
-```bash
-docker compose up -d postgres
+```powershell
+Get-Service *postgres*
+Start-Service PostgreSQL  # 仅在服务未运行时执行；名称以 Get-Service 输出为准
 ```
 
-### 2. 安装依赖
+首次使用时创建数据库。若 PostgreSQL 未加入 `PATH`，使用安装目录中的完整路径：
+
+```powershell
+$env:PGPASSWORD = "你的 postgres 密码"
+& "C:\Program Files\PostgreSQL\17\bin\createdb.exe" -h localhost -U postgres compare
+```
+
+数据库已存在时不需要重复创建。
+
+### 2. 配置本地环境
+
+```powershell
+Copy-Item .env.example apps/web/.env.local
+$env:DATABASE_URL = "postgresql://postgres:你的密码@localhost:5432/compare"
+```
+
+同时把 `apps/web/.env.local` 中的 `DATABASE_URL` 改为相同连接串。本地配置已被 Git 忽略，不要提交真实密码或令牌。
+
+### 3. 安装依赖
 
 ```bash
 pnpm install
 ```
 
-### 3. 运行数据库迁移
+### 4. 运行已有数据库迁移
 
 ```bash
-pnpm db:generate
 pnpm db:migrate
 ```
 
-### 4. 启动开发服务器
+`pnpm db:generate` 只在修改 Drizzle schema、需要创建新迁移时执行，不属于日常启动步骤。
+
+### 5. 启动开发服务器
 
 ```bash
 pnpm dev
@@ -63,7 +83,7 @@ pnpm dev
 - Web 后台: http://localhost:3000
 - Validator: http://localhost:3001
 
-### 5. 首次登录
+### 6. 首次登录
 
 访问 http://localhost:3000/login，使用部署环境变量中的初始用户名和密码登录。首次登录后系统强制修改密码。
 
@@ -109,9 +129,25 @@ pnpm typecheck
 pnpm test:e2e
 ```
 
-## 生产部署
+## 备份与恢复（本机 PostgreSQL）
 
-### Docker Compose（完整栈）
+```powershell
+$env:PGPASSWORD = "你的 postgres 密码"
+& "C:\Program Files\PostgreSQL\17\bin\pg_dump.exe" -h localhost -U postgres -Fc -d compare -f backup.dump
+```
+
+恢复到空数据库：
+
+```powershell
+& "C:\Program Files\PostgreSQL\17\bin\createdb.exe" -h localhost -U postgres compare_restore
+& "C:\Program Files\PostgreSQL\17\bin\pg_restore.exe" -h localhost -U postgres -d compare_restore backup.dump
+```
+
+## 可选服务器部署
+
+下面的 Docker Compose 文件用于 Linux 服务器完整栈部署，不是本地开发依赖，也不需要安装 Docker Desktop。
+
+### Docker Compose（Linux 服务器）
 
 ```bash
 # 复制环境配置

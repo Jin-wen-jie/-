@@ -13,6 +13,16 @@ export class PublicUrlError extends Error {
   }
 }
 
+export interface PublicAddress {
+  address: string;
+  family: 4 | 6;
+}
+
+export interface PublicUrlResolution {
+  hostname: string;
+  addresses: PublicAddress[];
+}
+
 /**
  * Verify that a URL targets a public internet destination.
  * Resolves the hostname and checks every returned IP address
@@ -21,7 +31,7 @@ export class PublicUrlError extends Error {
 export async function assertPublicUrl(
   urlStr: string,
   resolveHost: (hostname: string) => Promise<string[]> = defaultResolve,
-): Promise<void> {
+): Promise<PublicUrlResolution> {
   let parsed: URL;
   try {
     parsed = new URL(urlStr);
@@ -57,10 +67,18 @@ export async function assertPublicUrl(
   }
 
   // Check if it's an IP literal
-  const hostname = parsed.hostname;
+  const hostname = parsed.hostname.startsWith("[")
+    ? parsed.hostname.slice(1, -1)
+    : parsed.hostname;
   if (ipaddr.isValid(hostname)) {
-    checkIp(ipaddr.parse(hostname));
-    return;
+    const address = ipaddr.parse(hostname);
+    checkIp(address);
+    return {
+      hostname,
+      addresses: [
+        { address: hostname, family: address.kind() === "ipv4" ? 4 : 6 },
+      ],
+    };
   }
 
   // Resolve DNS and check every address
@@ -74,14 +92,37 @@ export async function assertPublicUrl(
     );
   }
 
-  for (const addr of addresses) {
-    checkIp(ipaddr.parse(addr));
+  if (addresses.length === 0) {
+    throw new PublicUrlError(
+      `DNS resolution returned no addresses for ${hostname}`,
+      "DNS_FAILURE",
+    );
   }
+
+  const validated: PublicAddress[] = [];
+  for (const addr of addresses) {
+    let parsedAddress: ipaddr.IPv4 | ipaddr.IPv6;
+    try {
+      parsedAddress = ipaddr.parse(addr);
+    } catch {
+      throw new PublicUrlError(
+        `DNS resolution returned an invalid address for ${hostname}`,
+        "DNS_FAILURE",
+      );
+    }
+    checkIp(parsedAddress);
+    validated.push({
+      address: addr,
+      family: parsedAddress.kind() === "ipv4" ? 4 : 6,
+    });
+  }
+
+  return { hostname, addresses: validated };
 }
 
 async function defaultResolve(hostname: string): Promise<string[]> {
-  const records = await dns.resolve4(hostname);
-  return records;
+  const records = await dns.lookup(hostname, { all: true, verbatim: true });
+  return records.map((record) => record.address);
 }
 
 function checkIp(addr: ipaddr.IPv4 | ipaddr.IPv6): void {
@@ -101,15 +142,8 @@ function checkIp(addr: ipaddr.IPv4 | ipaddr.IPv6): void {
   }
 
   // Pure IPv6 that isn't IPv4-mapped — check range
-  const ipv6 = addr as ipaddr.IPv6;
-  const range = ipv6.range();
-  if (
-    range === "loopback" ||
-    range === "linkLocal" ||
-    range === "multicast" ||
-    range === "uniqueLocal" ||
-    isSpecialIpv6(ipv6)
-  ) {
+  const range = (addr as ipaddr.IPv6).range();
+  if (range !== "unicast") {
     throw new PublicUrlError(
       `Private or special address: ${addr.toString()}`,
       "PRIVATE_ADDRESS",
@@ -119,25 +153,10 @@ function checkIp(addr: ipaddr.IPv4 | ipaddr.IPv6): void {
 
 function checkIpv4(addr: ipaddr.IPv4): void {
   const range = addr.range();
-  if (
-    range === "loopback" ||
-    range === "private" ||
-    range === "linkLocal" ||
-    range === "carrierGradeNat" ||
-    range === "multicast" ||
-    range === "reserved"
-  ) {
+  if (range !== "unicast") {
     throw new PublicUrlError(
       `Private or special address: ${addr.toString()}`,
       "PRIVATE_ADDRESS",
     );
   }
-}
-
-function isSpecialIpv6(addr: ipaddr.IPv6): boolean {
-  // Block documentation prefix, 6to4, teredo, etc. if they resolve
-  const str = addr.toNormalizedString();
-  if (str.startsWith("2001:db8:")) return true; // documentation
-  if (str === "::1") return true;
-  return false;
 }

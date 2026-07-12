@@ -1,7 +1,23 @@
 import { describe, expect, it, vi } from "vitest";
-import { bootstrapAdmin } from "./bootstrap-admin.js";
+import {
+  bootstrapAdmin,
+  hashPassword,
+  verifyPassword,
+} from "./bootstrap-admin.js";
 
 describe("bootstrapAdmin", () => {
+  it("hashes changed passwords with Argon2id", async () => {
+    const passwordHash = await hashPassword("new-password-123");
+
+    expect(passwordHash).toMatch(/^\$argon2id\$/);
+    await expect(
+      verifyPassword(passwordHash, "new-password-123"),
+    ).resolves.toBe(true);
+    await expect(verifyPassword(passwordHash, "wrong-password")).resolves.toBe(
+      false,
+    );
+  });
+
   it("creates id 1 only when the table is empty", async () => {
     const repo = {
       find: vi.fn().mockResolvedValue(null),

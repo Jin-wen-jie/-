@@ -60,7 +60,9 @@ export function canAccessAdminPage(
   ctx: AdminPageContext,
   pathname: string,
 ): boolean {
-  if (ctx.forcePasswordChange && !pathname.startsWith("/settings")) {
+  const isSettingsPage =
+    pathname === "/settings" || pathname.startsWith("/settings/");
+  if (ctx.forcePasswordChange && !isSettingsPage) {
     return false;
   }
   return true;

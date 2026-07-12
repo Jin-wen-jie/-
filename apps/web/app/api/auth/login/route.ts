@@ -1,26 +1,15 @@
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { createHash, randomBytes } from "node:crypto";
-
-const SESSION_COOKIE = "admin_session";
+import { verifyPassword } from "@compare/db";
+import { getAdminAuthRepository } from "../../../../lib/auth-repository";
+import { authenticateAdmin } from "../../../../lib/auth-service";
+import { CSRF_COOKIE, SESSION_COOKIE, csrfCookieOptions, sessionCookieOptions } from "../../../../lib/server-auth";
 
 const loginSchema = z.object({
   username: z.string().min(1),
   password: z.string().min(1),
 });
-
-const DEMO_USERNAME = process.env.ADMIN_INITIAL_USERNAME ?? "owner";
-const DEMO_PASSWORD =
-  process.env.ADMIN_INITIAL_PASSWORD ?? "demo-password-for-testing";
-
-function generateSessionToken(): string {
-  return randomBytes(32).toString("hex");
-}
-
-function hashToken(token: string): string {
-  return createHash("sha256").update(token).digest("hex");
-}
 
 export async function POST(request: Request) {
   const body = loginSchema.safeParse(await request.json().catch(() => ({})));
@@ -28,29 +17,14 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Invalid request" }, { status: 400 });
   }
 
-  const { username, password } = body.data;
-
-  if (username !== DEMO_USERNAME || password !== DEMO_PASSWORD) {
+  const repository = await getAdminAuthRepository();
+  const result = await authenticateAdmin(repository, body.data, { verifyPassword });
+  if (!result.ok) {
     return NextResponse.json({ error: "用户名或密码错误" }, { status: 401 });
   }
 
-  const token = generateSessionToken();
-  hashToken(token);
-
   const cookieStore = await cookies();
-  cookieStore.set(SESSION_COOKIE, token, {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
-    sameSite: "strict",
-    path: "/",
-    maxAge: 60 * 60 * 24,
-  });
-
-  // In dev mode (no env override), skip forcePasswordChange for convenience
-  const forcePasswordChange =
-    !!process.env.ADMIN_INITIAL_PASSWORD &&
-    process.env.ADMIN_INITIAL_PASSWORD !== "demo-password-for-testing" &&
-    password === process.env.ADMIN_INITIAL_PASSWORD;
-
-  return NextResponse.json({ ok: true, forcePasswordChange });
+  cookieStore.set(SESSION_COOKIE, result.token, sessionCookieOptions(result.expiresAt));
+  cookieStore.set(CSRF_COOKIE, result.csrfToken, csrfCookieOptions(result.expiresAt));
+  return NextResponse.json({ ok: true, forcePasswordChange: result.forcePasswordChange });
 }

@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
+import { reviewCandidate } from "../../../../../lib/candidate-repository";
+import { assertAdminMutation } from "../../../../../lib/server-auth";
 
 const reviewSchema = z.object({
   action: z.enum(["approve", "reject"]),
@@ -10,6 +12,13 @@ export async function POST(
   request: Request,
   { params }: { params: Promise<{ id: string }> },
 ) {
+  const authorization = await assertAdminMutation(request);
+  if (!authorization.ok) {
+    return NextResponse.json(
+      { error: authorization.error },
+      { status: authorization.status },
+    );
+  }
   const { id } = await params;
   const body = reviewSchema.safeParse(
     await request.json().catch(() => ({})),
@@ -22,11 +31,14 @@ export async function POST(
   }
 
   const { action, reason } = body.data;
-
-  return NextResponse.json({
-    id,
-    status: action === "approve" ? "APPROVED" : "REJECTED",
-    reason: reason ?? null,
-    reviewedAt: new Date().toISOString(),
-  });
+  const result = await reviewCandidate(id, action, reason);
+  if (!result.ok) {
+    const status = result.reason === "NOT_FOUND" ? 404 : 409;
+    const error =
+      result.reason === "NOT_FOUND"
+        ? "候选记录不存在"
+        : "规格尚未归一化，不能通过审核";
+    return NextResponse.json({ error }, { status });
+  }
+  return NextResponse.json(result);
 }

@@ -14,6 +14,7 @@
   "dependencies": {
     "@compare/db": "workspace:*",
     "@compare/domain": "workspace:*",
+    "pg-boss": "12.26.0",
     "zod": "3.24.2"
   },
   "devDependencies": {

@@ -78,6 +78,7 @@ export const adminSessions = pgTable("admin_sessions", {
   id: text("id").primaryKey(),
   tokenHash: text("token_hash").notNull().unique(),
   csrfTokenHash: text("csrf_token_hash"),
+  sessionVersion: integer("session_version").notNull().default(0),
   expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
   revokedAt: timestamp("revoked_at", { withTimezone: true }),
   lastUsedAt: timestamp("last_used_at", { withTimezone: true })

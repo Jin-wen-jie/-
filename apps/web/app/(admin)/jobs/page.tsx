@@ -1,55 +1,91 @@
-"use client";
-
-import { useState } from "react";
-import { DataTable } from "../../../components/data-table";
+import { DataTable, type Column } from "../../../components/data-table";
 import { StatusBadge } from "../../../components/status-badge";
-import type { Column } from "../../../components/data-table";
+import { listSourceViews } from "../../../lib/admin-read-repository";
+import { ManualUrlForm } from "./manual-url-form";
 
-interface JobSource {
-  id: string; platform: string; status: string;
-  cursor: string | null; lastRunAt: string | null; discovered: number; errorCategory: string | null;
+interface SourceView {
+  id: string;
+  platform: string;
+  status: string;
+  cursor: string | null;
+  lastRunAt: string | null;
+  discovered: number;
+  errorCategory: string | null;
 }
 
-const demoSources: JobSource[] = [
-  { id: "src-x", platform: "X (Twitter)", status: "NOT_CONFIGURED", cursor: null, lastRunAt: null, discovered: 0, errorCategory: "缺少 Bearer Token — 请在部署环境设置 X_BEARER_TOKEN" },
-  { id: "src-tg", platform: "Telegram", status: "NOT_CONFIGURED", cursor: null, lastRunAt: null, discovered: 0, errorCategory: "缺少 api_id/api_hash/session — 请在部署环境设置" },
+const columns: Column<SourceView>[] = [
+  {
+    key: "platform",
+    header: "平台",
+    render: (row) => <span className="font-semibold text-gray-900">{row.platform}</span>,
+  },
+  {
+    key: "status",
+    header: "状态",
+    render: (row) => <StatusBadge status={row.status} />,
+  },
+  {
+    key: "cursor",
+    header: "游标",
+    render: (row) => (
+      <span className="font-mono text-xs text-gray-600">
+        {row.cursor ?? "—"}
+      </span>
+    ),
+  },
+  {
+    key: "lastRun",
+    header: "最近运行",
+    render: (row) => (
+      <span className="text-xs text-gray-600">
+        {row.lastRunAt
+          ? new Date(row.lastRunAt).toLocaleString("zh-CN")
+          : "从未运行"}
+      </span>
+    ),
+  },
+  {
+    key: "discovered",
+    header: "发现数",
+    render: (row) => (
+      <span className="font-mono font-semibold text-gray-900">
+        {row.discovered}
+      </span>
+    ),
+  },
+  {
+    key: "error",
+    header: "说明",
+    render: (row) =>
+      row.errorCategory ? (
+        <span className="font-medium text-orange-700">{row.errorCategory}</span>
+      ) : (
+        <span className="text-gray-400">—</span>
+      ),
+  },
 ];
 
-const cols: Column<JobSource>[] = [
-  { key: "platform", header: "平台", render: (r) => <span className="font-semibold text-gray-900">{r.platform}</span> },
-  { key: "status", header: "状态", render: (r) => <StatusBadge status={r.status} /> },
-  { key: "cursor", header: "游标", render: (r) => <span className="text-gray-600">{r.cursor ?? "—"}</span> },
-  { key: "lastRun", header: "最近运行", render: (r) => <span className="text-gray-600">{r.lastRunAt ?? "从未运行"}</span> },
-  { key: "discovered", header: "发现数", render: (r) => <span className="font-mono font-semibold text-gray-900">{r.discovered}</span> },
-  { key: "error", header: "说明", render: (r) => r.errorCategory ? <span className="text-orange-700 font-medium">{r.errorCategory}</span> : <span className="text-gray-400">—</span> },
-];
-
-export default function JobsPage() {
-  const [url, setUrl] = useState("");
-  const [adding, setAdding] = useState(false);
-
-  async function handleAdd(e: React.FormEvent) {
-    e.preventDefault();
-    if (!url) return;
-    setAdding(true);
-    try {
-      await fetch("/api/candidates", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ productUrl: url }) });
-      setUrl("");
-    } finally { setAdding(false); }
-  }
+export default async function JobsPage() {
+  const sources = await listSourceViews();
 
   return (
     <div>
-      <div className="mb-4 flex items-center justify-between">
-        <h2 className="text-xl font-bold text-gray-900">采集任务</h2>
-        <form onSubmit={handleAdd} className="flex gap-2">
-          <input type="url" className="rounded border border-gray-300 px-3 py-1.5 text-sm text-gray-900 placeholder-gray-400 focus:border-blue-500 focus:outline-none" placeholder="手工补充商品 URL" value={url} onChange={(e) => setUrl(e.target.value)} />
-          <button type="submit" disabled={adding || !url} className="rounded bg-blue-600 px-4 py-1.5 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-40">添加</button>
-        </form>
+      <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <h2 className="text-xl font-bold text-gray-900">采集任务</h2>
+          <p className="mt-0.5 text-xs text-gray-500">
+            来源连接器状态基于真实凭据配置。缺少凭据时显示为未配置，不影响手工补链。
+          </p>
+        </div>
+        <ManualUrlForm />
       </div>
       <h3 className="mb-2 text-sm font-semibold text-gray-800">来源连接器</h3>
-      <DataTable columns={cols} rows={demoSources} getRowKey={(r) => r.id} />
-      <p className="mt-4 text-sm text-gray-600 leading-relaxed">连接器状态基于真实凭据配置。X 和 Telegram 需要分别在部署环境中提供有效的 Bearer Token 或 api_id/api_hash/session。缺少凭据时连接器显示为"未配置"，不影响手工补链功能。</p>
+      <DataTable columns={columns} rows={sources} getRowKey={(row) => row.id} />
+      <p className="mt-4 text-xs leading-relaxed text-gray-500">
+        X 和 Telegram 连接器需要分别在部署环境中提供有效的 Bearer Token 或
+        api_id/api_hash/session。缺少凭据时连接器显示为"未配置"，不伪造零结果。
+        调度频率：来源发现每 30 分钟，链接复检每 6 小时，汇率每日刷新。
+      </p>
     </div>
   );
 }

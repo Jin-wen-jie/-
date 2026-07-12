@@ -15,6 +15,14 @@ export interface BootstrapConfig {
   password: string;
 }
 
+export async function hashPassword(password: string): Promise<string> {
+  return hash(password, {
+    memoryCost: 65536,
+    timeCost: 3,
+    outputLen: 32,
+  });
+}
+
 export async function bootstrapAdmin(
   repo: AdminRepo,
   config: BootstrapConfig,
@@ -25,11 +33,7 @@ export async function bootstrapAdmin(
     return;
   }
 
-  const passwordHash = await hash(config.password, {
-    memoryCost: 65536,
-    timeCost: 3,
-    outputLen: 32,
-  });
+  const passwordHash = await hashPassword(config.password);
 
   await repo.create({
     id: 1,
