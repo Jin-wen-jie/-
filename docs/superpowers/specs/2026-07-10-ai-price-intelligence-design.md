@@ -80,9 +80,17 @@ web 与 worker 不共享内存，只通过数据库和任务队列通信。valid
 
 **Bug Team 关键词：** `Bug Team`、`Bugteam`、`bug team`、`bugteam ChatGPT`、`教育团队`、`education team`、`Team 教育版`、`team education`、`团队教育优惠`、`edu team`、`Bug Team 账号`、`Bugteam 套餐`
 
-**排除词：** `API`、`api key`、`API key`、`reseller`、`批发`、`代理`（过滤掉普通 API 转售和批发类内容）
+**发卡平台关键词：** `ldxp.cn`、`发卡平台`、`卡网`、`自动发卡`、`shop`、`卡密平台`、`数字商品`（用于发现托管 K12/BugTeam 店铺的发卡平台）
+
+**排除词：** `API`、`api key`、`reseller`、`批发`、`代理`、`代购`、`代充`、`中转`、`转发 API`（过滤掉 API 转售和代充类内容）
+
+**已知发卡平台域名：** `ldxp.cn`、`ldxp.cn/shop`（种子数据中预置，连接器优先关注这些域名上的新店铺）
 
 关键词、排除词和来源频道可在 `/jobs` 中启停和调整。与 K12/Bug Team 无关的候选在抽取阶段自动过滤，不进入审核主队列。关键词命中只代表调查线索，不代表商品合规或商家可信。
+
+**初始种子频道（Telegram）：** `with_ai_homes`（AI 卖家交流群，成员个人主页挂载卡网店铺链接）
+
+**初始种子候选店铺：** 通过 `pnpm db:seed` 写入 `discovery_candidates` 表，包含 `ldxp.cn` 平台上已知的 K12/BugTeam 店铺链接。启动后进入候选审核队列，验证通过后进入榜单。
 
 ### X
 
