@@ -10,7 +10,8 @@
     "test:e2e": "playwright test",
     "typecheck": "pnpm -r typecheck",
     "db:generate": "pnpm --filter @compare/db db:generate",
-    "db:migrate": "pnpm --filter @compare/db db:migrate"
+    "db:migrate": "pnpm --filter @compare/db db:migrate",
+    "db:seed": "pnpm --filter @compare/db db:seed"
   },
   "devDependencies": {
     "@eslint/js": "^9.37.0",

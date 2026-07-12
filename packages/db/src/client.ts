@@ -19,3 +19,4 @@ export {
   hashPassword,
   verifyPassword,
 } from "./bootstrap-admin";
+export { seedWatchSources, INITIAL_WATCH_SOURCES } from "./seed-watch-sources";

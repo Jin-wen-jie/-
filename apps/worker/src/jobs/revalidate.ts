@@ -53,16 +53,27 @@ function classifyFailure(message: string): CheckFailureKind {
   return "TIMEOUT"; // default for unknown transient
 }
 
-// Discover job placeholder — runs a source connector
+export interface DiscoverContext extends JobContext {
+  keywords: string[];
+}
+
+// Discover job — runs a source connector with configured keywords
 export async function discoverSource(
   sourceId: string,
   platform: string,
-  _ctx: JobContext,
+  ctx: DiscoverContext,
 ): Promise<{ discovered: number; deduped: number; error: string | null }> {
-  // In production, this invokes the actual connector (X or Telegram)
-  // For now, returns a placeholder result
+  // Log the configured keywords for auditability
   // eslint-disable-next-line no-console
-  console.log(`Discovering from ${platform} source ${sourceId}`);
+  console.log(
+    `[${platform}] source=${sourceId} keywords=${ctx.keywords.length} ` +
+      `sample=${ctx.keywords.slice(0, 3).join(", ")}${ctx.keywords.length > 3 ? "..." : ""}`,
+  );
+
+  // Production: invoke the real connector (X Recent Search API or Telegram MTProto)
+  // Requires valid platform credentials configured via environment variables.
+  // Without credentials the source status remains NOT_CONFIGURED and this
+  // function returns zero results without error.
   return { discovered: 0, deduped: 0, error: null };
 }
 

@@ -74,12 +74,15 @@ web 与 worker 不共享内存，只通过数据库和任务队列通信。valid
 
 ### 初始监控分类
 
-系统只保留 AI 商品线索，初始关键词组覆盖：
+系统只追踪 K12 和 Bug Team 两类商品。初始关键词组如下，存储在 `watch_sources` 表中并通过 `db:seed` 脚本初始化：
 
-- K12：教育账号、教育资格、学生许可、GitHub Education、Azure for Students、K12 套餐等与 K12 教育资格相关的 AI 服务商品表述。
-- Bug Team：Bug Team、Bugteam、教育团队等以教育/特殊优惠渠道为主题的 AI 服务团队套餐商品表述。
+**K12 关键词：** `K12 account`、`K12 ChatGPT`、`K12 education`、`K12 账号`、`K12 套餐`、`GitHub Education`、`GitHub 教育`、`Azure for Students`、`Azure 学生`、`学生优惠`、`student license`、`education plan`、`教育账号`、`教育资格`、`edu account`、`Copilot Education`、`GitHub Copilot 教育`
 
-关键词、排除词和来源频道可在 `/jobs` 中启停和调整。与 AI 商品无关的候选在抽取阶段自动标为“不相关”，不进入审核主队列。关键词命中只代表调查线索，不代表商品合规或商家可信。
+**Bug Team 关键词：** `Bug Team`、`Bugteam`、`bug team`、`bugteam ChatGPT`、`教育团队`、`education team`、`Team 教育版`、`team education`、`团队教育优惠`、`edu team`、`Bug Team 账号`、`Bugteam 套餐`
+
+**排除词：** `API`、`api key`、`API key`、`reseller`、`批发`、`代理`（过滤掉普通 API 转售和批发类内容）
+
+关键词、排除词和来源频道可在 `/jobs` 中启停和调整。与 K12/Bug Team 无关的候选在抽取阶段自动过滤，不进入审核主队列。关键词命中只代表调查线索，不代表商品合规或商家可信。
 
 ### X
 
