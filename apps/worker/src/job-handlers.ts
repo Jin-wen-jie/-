@@ -56,6 +56,15 @@ interface JobHandlerDependencies {
   now?: () => Date;
 }
 
+export class PersistedEntityFailure extends Error {
+  readonly code = "PERSISTED_ENTITY_FAILURE";
+
+  constructor() {
+    super("CANDIDATE_VALIDATION_FAILED");
+    this.name = "PersistedEntityFailure";
+  }
+}
+
 export function createJobHandlers(dependencies: JobHandlerDependencies) {
   const now = dependencies.now ?? (() => new Date());
 
@@ -67,31 +76,33 @@ export function createJobHandlers(dependencies: JobHandlerDependencies) {
       if (!candidate) return { status: "missing" as const };
 
       await dependencies.repository.markCandidateValidating(candidate.id);
+      let result: ValidatorResponse;
       try {
-        const result = await dependencies.validate(candidate.productUrl);
-        await dependencies.repository.saveCandidateValidation(
-          candidate.id,
-          result,
-        );
-        // Discover other shops on the same platform
-        const discovered = result.extraction.platformLinks ?? [];
-        if (discovered.length > 0) {
-          const ids = await dependencies.repository.saveDiscoveredPlatformLinks(
-            discovered,
-          );
-          if (ids.length > 0) {
-            await Promise.all(
-              ids.map((id) =>
-                dependencies.enqueue(QUEUES.VALIDATE_CANDIDATE, id),
-              ),
-            );
-          }
-        }
-        return { status: "validated" as const };
+        result = await dependencies.validate(candidate.productUrl);
       } catch (error) {
         await dependencies.repository.saveCandidateFailure(candidate.id, error);
-        throw error;
+        throw new PersistedEntityFailure();
       }
+
+      await dependencies.repository.saveCandidateValidation(
+        candidate.id,
+        result,
+      );
+      // Discover other shops on the same platform
+      const discovered = result.extraction.platformLinks ?? [];
+      if (discovered.length > 0) {
+        const ids = await dependencies.repository.saveDiscoveredPlatformLinks(
+          discovered,
+        );
+        if (ids.length > 0) {
+          await Promise.all(
+            ids.map((id) =>
+              dependencies.enqueue(QUEUES.VALIDATE_CANDIDATE, id),
+            ),
+          );
+        }
+      }
+      return { status: "validated" as const };
     },
 
     async sweepCandidates() {
@@ -108,9 +119,12 @@ export function createJobHandlers(dependencies: JobHandlerDependencies) {
       const listing = await dependencies.repository.getListingForRevalidation(
         input.listingId,
       );
-      if (!listing) return { status: "missing" as const };
+      if (!listing) {
+        return { outcome: "succeeded" as const, status: "missing" as const };
+      }
 
       let result: ListingValidationResult;
+      let outcome: "succeeded" | "failed" = "succeeded";
       try {
         const observation = await dependencies.validate(listing.originalUrl);
         result = {
@@ -123,6 +137,7 @@ export function createJobHandlers(dependencies: JobHandlerDependencies) {
           failure: null,
         };
       } catch (error) {
+        outcome = "failed";
         const failureKind = classifyFailure(error);
         const lastSuccessAgeHours = listing.lastSuccessAt
           ? (now().getTime() - listing.lastSuccessAt.getTime()) / 3_600_000
@@ -144,7 +159,7 @@ export function createJobHandlers(dependencies: JobHandlerDependencies) {
         };
       }
       await dependencies.repository.saveListingRevalidation(listing.id, result);
-      return { status: result.status };
+      return { outcome, status: result.status };
     },
 
     async sweepListings() {

@@ -1,13 +1,58 @@
 import { describe, expect, it } from "vitest";
-import type { createJobHandlers } from "./job-handlers.js";
+import {
+  createJobHandlers,
+  PersistedEntityFailure,
+  type WorkerRepository,
+} from "./job-handlers.js";
 import { QUEUES } from "./queue.js";
 import {
   runWorkerBatch,
   type BatchQueue,
 } from "./run-batch.js";
 import { parseRunOnceConfig } from "./run-once.js";
+import type { ValidatorResponse } from "./validator-client.js";
 
 type JobHandlers = ReturnType<typeof createJobHandlers>;
+
+const integrationValidationResult = {
+  originalUrl: "https://shop.example/item/1",
+  finalUrl: "https://shop.example/item/1",
+  redirectChain: [],
+  httpStatus: 200,
+  elapsedMs: 25,
+  extraction: {
+    title: "GPT K12",
+    price: "10.00",
+    currency: "CNY",
+    availability: "IN_STOCK",
+    stockText: "in stock",
+    stockQuantity: 5,
+    buyAction: true,
+    pageFingerprint: "page-hash",
+    platformLinks: [],
+    confidence: { title: 1, price: 1, availability: 1 },
+  },
+} satisfies ValidatorResponse;
+
+function createRepository(
+  overrides: Partial<WorkerRepository> = {},
+): WorkerRepository {
+  return {
+    listCandidateIdsForValidation: async () => [],
+    getCandidateForValidation: async () => ({
+      id: "candidate-1",
+      productUrl: "https://shop.example/item/1",
+    }),
+    markCandidateValidating: async () => undefined,
+    saveCandidateValidation: async () => undefined,
+    saveCandidateFailure: async () => undefined,
+    saveDiscoveredPlatformLinks: async () => [],
+    listListingIdsForRevalidation: async () => [],
+    getListingForRevalidation: async () => null,
+    saveListingRevalidation: async () => undefined,
+    ...overrides,
+  };
+}
 
 function createHandlers(
   enqueue: (queue: BatchQueue, id: string) => Promise<void>,
@@ -41,11 +86,72 @@ function createHandlers(
       return { queued: listingIds.length };
     },
     revalidateListing: options.revalidateListing ??
-      (async () => ({ status: "ACTIVE" as const })),
+      (async () => ({
+        outcome: "succeeded" as const,
+        status: "ACTIVE" as const,
+      })),
   };
 }
 
 describe("runWorkerBatch", () => {
+  it.each([
+    ["candidateLimit", 0],
+    ["candidateLimit", -1],
+    ["candidateLimit", 1.5],
+    ["candidateLimit", Number.NaN],
+    ["candidateLimit", Number.POSITIVE_INFINITY],
+    ["candidateLimit", Number.MAX_SAFE_INTEGER + 1],
+    ["listingLimit", 0],
+    ["listingLimit", -1],
+    ["listingLimit", 1.5],
+    ["listingLimit", Number.NaN],
+    ["listingLimit", Number.POSITIVE_INFINITY],
+    ["listingLimit", Number.MAX_SAFE_INTEGER + 1],
+    ["concurrency", 0],
+    ["concurrency", -1],
+    ["concurrency", 1.5],
+    ["concurrency", Number.NaN],
+    ["concurrency", Number.POSITIVE_INFINITY],
+    ["concurrency", Number.MAX_SAFE_INTEGER + 1],
+    ["deadlineMs", 0],
+    ["deadlineMs", -1],
+    ["deadlineMs", 1.5],
+    ["deadlineMs", Number.NaN],
+    ["deadlineMs", Number.POSITIVE_INFINITY],
+    ["deadlineMs", Number.MAX_SAFE_INTEGER + 1],
+  ] as const)("rejects invalid %s=%s", async (name, value) => {
+    let factoryCalled = false;
+    const options = {
+      createHandlers: (enqueue: (queue: BatchQueue, id: string) => Promise<void>) => {
+        factoryCalled = true;
+        return createHandlers(enqueue);
+      },
+      candidateLimit: 50,
+      listingLimit: 50,
+      concurrency: 4,
+      deadlineMs: 1_000,
+      now: () => 0,
+    };
+
+    await expect(
+      runWorkerBatch({ ...options, [name]: value }),
+    ).rejects.toThrow(`${name} must be a positive safe integer`);
+    expect(factoryCalled).toBe(false);
+  });
+
+  it("rejects concurrency above the batch maximum", async () => {
+    await expect(
+      runWorkerBatch({
+        createHandlers: (enqueue) => createHandlers(enqueue),
+        candidateLimit: 50,
+        listingLimit: 50,
+        concurrency: 17,
+        deadlineMs: 1_000,
+        now: () => 0,
+      }),
+    ).rejects.toThrow("concurrency must not exceed 16");
+  });
+
   it("caps attempts at the candidate and listing limits", async () => {
     const candidateIds = Array.from(
       { length: 60 },
@@ -100,7 +206,7 @@ describe("runWorkerBatch", () => {
           },
           revalidateListing: async () => {
             await processEntity();
-            return { status: "ACTIVE" };
+            return { outcome: "succeeded", status: "ACTIVE" };
           },
         }),
       candidateLimit: 50,
@@ -185,14 +291,14 @@ describe("runWorkerBatch", () => {
               await enqueueCandidate?.("candidate-2");
               return { status: "validated" };
             }
-            throw new Error("stable candidate failure category");
+            throw new PersistedEntityFailure();
           },
           revalidateListing: async ({ listingId }) => {
             attemptedListings.push(listingId);
             if (listingId === "listing-1") {
-              throw new Error("stable listing failure category");
+              return { outcome: "failed", status: "RECHECK" };
             }
-            return { status: "ACTIVE" };
+            return { outcome: "succeeded", status: "ACTIVE" };
           },
         });
       },
@@ -255,6 +361,164 @@ describe("runWorkerBatch", () => {
     });
     expect(attemptedCandidates).toEqual(["candidate-1", "candidate-2"]);
   });
+
+  it.each(["get", "save"] as const)(
+    "rejects when candidate repository %s fails",
+    async (operation) => {
+      const failure = new Error(`candidate repository ${operation} failed`);
+      const repository = createRepository({
+        listCandidateIdsForValidation: async () => ["candidate-1"],
+        ...(operation === "get"
+          ? { getCandidateForValidation: async () => Promise.reject(failure) }
+          : { saveCandidateValidation: async () => Promise.reject(failure) }),
+      });
+
+      await expect(
+        runWorkerBatch({
+          createHandlers: (enqueue) =>
+            createJobHandlers({
+              repository,
+              validate: async () => integrationValidationResult,
+              enqueue,
+            }),
+          candidateLimit: 10,
+          listingLimit: 10,
+          concurrency: 1,
+          deadlineMs: 1_000,
+          now: () => 0,
+        }),
+      ).rejects.toBe(failure);
+    },
+  );
+
+  it("counts a persisted listing timeout as an entity failure", async () => {
+    const repository = createRepository({
+      listListingIdsForRevalidation: async () => ["listing-1"],
+      getListingForRevalidation: async () => ({
+        id: "listing-1",
+        originalUrl: "https://shop.example/item/1",
+        status: "ACTIVE",
+        consecutiveFailures: 0,
+        lastSuccessAt: null,
+      }),
+    });
+
+    await expect(
+      runWorkerBatch({
+        createHandlers: (enqueue) =>
+          createJobHandlers({
+            repository,
+            validate: async () => Promise.reject(new Error("timeout")),
+            enqueue,
+          }),
+        candidateLimit: 10,
+        listingLimit: 10,
+        concurrency: 1,
+        deadlineMs: 1_000,
+        now: () => 0,
+      }),
+    ).resolves.toEqual({
+      candidates: { attempted: 0, succeeded: 0, failed: 0 },
+      listings: { attempted: 1, succeeded: 0, failed: 1 },
+      timedOut: false,
+    });
+  });
+
+  it("drains active work and throws the first fatal error", async () => {
+    const firstFailure = new Error("repository get failed");
+    const secondFailure = new Error("repository save failed");
+    const started: string[] = [];
+    let notifyActiveStarted!: () => void;
+    let releaseActive!: () => void;
+    let activeFinished = false;
+    const activeStarted = new Promise<void>((resolve) => {
+      notifyActiveStarted = resolve;
+    });
+    const release = new Promise<void>((resolve) => {
+      releaseActive = resolve;
+    });
+    const batch = runWorkerBatch({
+      createHandlers: (enqueue) =>
+        createHandlers(enqueue, {
+          candidateIds: ["fatal", "active", "queued"],
+          validateCandidate: async ({ candidateId }) => {
+            started.push(candidateId);
+            if (candidateId === "fatal") {
+              await activeStarted;
+              throw firstFailure;
+            }
+            if (candidateId === "active") {
+              notifyActiveStarted();
+              try {
+                await release;
+                throw secondFailure;
+              } finally {
+                activeFinished = true;
+              }
+            }
+            return { status: "validated" };
+          },
+        }),
+      candidateLimit: 10,
+      listingLimit: 10,
+      concurrency: 2,
+      deadlineMs: 1_000,
+      now: () => 0,
+    });
+    let settled = false;
+    void batch.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    );
+
+    await activeStarted;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const startedBeforeRelease = [...started];
+    const settledBeforeRelease = settled;
+    releaseActive();
+
+    await expect(batch).rejects.toBe(firstFailure);
+    expect(startedBeforeRelease).toEqual(["fatal", "active"]);
+    expect(settledBeforeRelease).toBe(false);
+    expect(activeFinished).toBe(true);
+    expect(started).not.toContain("queued");
+  });
+
+  it.each(["candidates", "listings"] as const)(
+    "propagates %s sweep failures before starting entity work",
+    async (queue) => {
+      const failure = new Error(`${queue} sweep failed`);
+      const validateCandidate = async () => ({ status: "validated" as const });
+      const revalidateListing = async () => ({
+        outcome: "succeeded" as const,
+        status: "ACTIVE" as const,
+      });
+
+      await expect(
+        runWorkerBatch({
+          createHandlers: () => ({
+            sweepCandidates: queue === "candidates"
+              ? async () => Promise.reject(failure)
+              : async () => ({ queued: 0 }),
+            validateCandidate,
+            sweepListings: queue === "listings"
+              ? async () => Promise.reject(failure)
+              : async () => ({ queued: 0 }),
+            revalidateListing,
+          }),
+          candidateLimit: 10,
+          listingLimit: 10,
+          concurrency: 2,
+          deadlineMs: 1_000,
+          now: () => 0,
+        }),
+      ).rejects.toBe(failure);
+    },
+  );
 });
 
 describe("parseRunOnceConfig", () => {
@@ -282,7 +546,7 @@ describe("parseRunOnceConfig", () => {
         VALIDATOR_BASE_URL: "http://validator.internal:4000",
         CANDIDATE_LIMIT: "12",
         LISTING_LIMIT: "34",
-        WORKER_CONCURRENCY: "6",
+        WORKER_CONCURRENCY: "16",
         WORKER_DEADLINE_MS: "90000",
       }),
     ).toEqual({
@@ -291,9 +555,18 @@ describe("parseRunOnceConfig", () => {
       validatorSharedToken: "shared-token",
       candidateLimit: 12,
       listingLimit: 34,
-      concurrency: 6,
+      concurrency: 16,
       deadlineMs: 90_000,
     });
+  });
+
+  it("rejects worker concurrency above the CLI maximum", () => {
+    expect(() =>
+      parseRunOnceConfig({
+        ...requiredEnv,
+        WORKER_CONCURRENCY: "17",
+      })
+    ).toThrow("WORKER_CONCURRENCY must not exceed 16");
   });
 
   it("requires the database URL and validator token", () => {
@@ -308,18 +581,22 @@ describe("parseRunOnceConfig", () => {
     ["CANDIDATE_LIMIT", "-1"],
     ["CANDIDATE_LIMIT", "1.5"],
     ["CANDIDATE_LIMIT", "many"],
+    ["CANDIDATE_LIMIT", "9007199254740992"],
     ["LISTING_LIMIT", "0"],
     ["LISTING_LIMIT", "-1"],
     ["LISTING_LIMIT", "1.5"],
     ["LISTING_LIMIT", "many"],
+    ["LISTING_LIMIT", "9007199254740992"],
     ["WORKER_CONCURRENCY", "0"],
     ["WORKER_CONCURRENCY", "-1"],
     ["WORKER_CONCURRENCY", "1.5"],
     ["WORKER_CONCURRENCY", "many"],
+    ["WORKER_CONCURRENCY", "9007199254740992"],
     ["WORKER_DEADLINE_MS", "0"],
     ["WORKER_DEADLINE_MS", "-1"],
     ["WORKER_DEADLINE_MS", "1.5"],
     ["WORKER_DEADLINE_MS", "many"],
+    ["WORKER_DEADLINE_MS", "9007199254740992"],
   ])("rejects %s=%s", (name, value) => {
     expect(() =>
       parseRunOnceConfig({ ...requiredEnv, [name]: value })

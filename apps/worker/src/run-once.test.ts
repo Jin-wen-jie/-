@@ -71,4 +71,23 @@ describe("runOnce", () => {
 
     await expect(invocation).rejects.toBe(failure);
   });
+
+  it("preserves both batch and close failures", async () => {
+    const batchFailure = new Error("stable batch failure");
+    const closeFailure = new Error("stable close failure");
+    const repository = {
+      close: vi.fn().mockRejectedValue(closeFailure),
+    } as unknown as WorkerRepositoryRuntime;
+
+    const failure = await runOnce(config, {
+      createRepository: () => repository,
+      runBatch: vi.fn().mockRejectedValue(batchFailure),
+    }).catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(AggregateError);
+    expect(failure).toMatchObject({
+      message: "WORKER_BATCH_AND_CLOSE_FAILED",
+      errors: [batchFailure, closeFailure],
+    });
+  });
 });

@@ -1,9 +1,14 @@
-import type { createJobHandlers } from "./job-handlers.js";
+import {
+  PersistedEntityFailure,
+  type createJobHandlers,
+} from "./job-handlers.js";
 import { QUEUES } from "./queue.js";
 
 export type BatchQueue =
   | typeof QUEUES.VALIDATE_CANDIDATE
   | typeof QUEUES.REVALIDATE_LISTING;
+
+export const MAX_WORKER_CONCURRENCY = 16;
 
 export interface BatchResult {
   candidates: { attempted: number; succeeded: number; failed: number };
@@ -29,6 +34,16 @@ type BatchTask =
 export async function runWorkerBatch(
   options: BatchOptions,
 ): Promise<BatchResult> {
+  assertPositiveSafeInteger("candidateLimit", options.candidateLimit);
+  assertPositiveSafeInteger("listingLimit", options.listingLimit);
+  assertPositiveSafeInteger("concurrency", options.concurrency);
+  assertPositiveSafeInteger("deadlineMs", options.deadlineMs);
+  if (options.concurrency > MAX_WORKER_CONCURRENCY) {
+    throw new Error(
+      `concurrency must not exceed ${MAX_WORKER_CONCURRENCY}`,
+    );
+  }
+
   const now = options.now ?? Date.now;
   const deadlineAt = now() + options.deadlineMs;
   const candidateIds: string[] = [];
@@ -77,7 +92,17 @@ export async function runWorkerBatch(
 
   let preferCandidates = true;
   let activeTasks = 0;
+  let hasFatalError = false;
+  let fatalError: unknown;
+  const recordFatalError = (error: unknown) => {
+    if (!hasFatalError) {
+      hasFatalError = true;
+      fatalError = error;
+    }
+    signalQueueChange();
+  };
   const takeTask = (): BatchTask | undefined => {
+    if (hasFatalError) return undefined;
     if (now() >= deadlineAt) {
       result.timedOut = true;
       return undefined;
@@ -115,7 +140,7 @@ export async function runWorkerBatch(
     while (true) {
       const task = takeTask();
       if (!task) {
-        if (result.timedOut || activeTasks === 0) return;
+        if (hasFatalError || result.timedOut || activeTasks === 0) return;
         await queueChanged;
         continue;
       }
@@ -124,15 +149,25 @@ export async function runWorkerBatch(
         try {
           await handlers.validateCandidate({ candidateId: task.id });
           result.candidates.succeeded++;
-        } catch {
-          result.candidates.failed++;
+        } catch (error) {
+          if (error instanceof PersistedEntityFailure) {
+            result.candidates.failed++;
+          } else {
+            recordFatalError(error);
+          }
         }
       } else {
         try {
-          await handlers.revalidateListing({ listingId: task.id });
-          result.listings.succeeded++;
-        } catch {
-          result.listings.failed++;
+          const outcome = await handlers.revalidateListing({
+            listingId: task.id,
+          });
+          if (outcome.outcome === "failed") {
+            result.listings.failed++;
+          } else {
+            result.listings.succeeded++;
+          }
+        } catch (error) {
+          recordFatalError(error);
         }
       }
       activeTasks--;
@@ -144,5 +179,12 @@ export async function runWorkerBatch(
     Array.from({ length: options.concurrency }, () => work()),
   );
 
+  if (hasFatalError) throw fatalError;
   return result;
+}
+
+function assertPositiveSafeInteger(name: string, value: number): void {
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw new Error(`${name} must be a positive safe integer`);
+  }
 }

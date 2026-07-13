@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { PersistedEntityFailure } from "./job-handlers.js";
 import { registerWorkers } from "./worker-runtime.js";
 import { QUEUES } from "./queue.js";
 
@@ -8,7 +9,10 @@ describe("worker runtime", () => {
     const handlers = {
       validateCandidate: vi.fn().mockResolvedValue({ status: "validated" }),
       sweepCandidates: vi.fn().mockResolvedValue({ queued: 0 }),
-      revalidateListing: vi.fn().mockResolvedValue({ status: "ACTIVE" }),
+      revalidateListing: vi.fn().mockResolvedValue({
+        outcome: "succeeded",
+        status: "ACTIVE",
+      }),
       sweepListings: vi.fn().mockResolvedValue({ queued: 0 }),
     };
 
@@ -32,5 +36,27 @@ describe("worker runtime", () => {
     expect(handlers.validateCandidate).toHaveBeenCalledWith({
       candidateId: "candidate-1",
     });
+
+    const retryFailure = new PersistedEntityFailure();
+    handlers.validateCandidate.mockRejectedValueOnce(retryFailure);
+    await expect(
+      validateWorker([{ data: { candidateId: "candidate-retry" } }]),
+    ).rejects.toBe(retryFailure);
+
+    const secondRegistration = boss.work.mock.calls[1];
+    expect(secondRegistration).toBeDefined();
+    if (!secondRegistration) {
+      throw new Error("listing worker was not registered");
+    }
+    const listingWorker = secondRegistration[1] as (
+      jobs: Array<{ data: { listingId: string } }>,
+    ) => Promise<unknown>;
+    handlers.revalidateListing.mockResolvedValueOnce({
+      outcome: "failed",
+      status: "RECHECK",
+    });
+    await expect(
+      listingWorker([{ data: { listingId: "listing-1" } }]),
+    ).resolves.toEqual([{ outcome: "failed", status: "RECHECK" }]);
   });
 });

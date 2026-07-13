@@ -2,6 +2,7 @@ import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { createJobHandlers } from "./job-handlers.js";
 import {
+  MAX_WORKER_CONCURRENCY,
   runWorkerBatch,
   type BatchResult,
 } from "./run-batch.js";
@@ -38,7 +39,12 @@ export function parseRunOnceConfig(
     validatorSharedToken: requireValue(env, "VALIDATOR_SHARED_TOKEN"),
     candidateLimit: positiveInteger(env, "CANDIDATE_LIMIT", 50),
     listingLimit: positiveInteger(env, "LISTING_LIMIT", 50),
-    concurrency: positiveInteger(env, "WORKER_CONCURRENCY", 4),
+    concurrency: positiveInteger(
+      env,
+      "WORKER_CONCURRENCY",
+      4,
+      MAX_WORKER_CONCURRENCY,
+    ),
     deadlineMs: positiveInteger(env, "WORKER_DEADLINE_MS", 1_500_000),
   };
 }
@@ -62,6 +68,7 @@ function positiveInteger(
     | "WORKER_CONCURRENCY"
     | "WORKER_DEADLINE_MS",
   defaultValue: number,
+  maximum?: number,
 ): number {
   const rawValue = env[name];
   if (rawValue === undefined) return defaultValue;
@@ -69,6 +76,9 @@ function positiveInteger(
   const value = Number(rawValue);
   if (!/^\d+$/.test(rawValue) || !Number.isSafeInteger(value) || value <= 0) {
     throw new RunOnceConfigError(`${name} must be a positive integer`);
+  }
+  if (maximum !== undefined && value > maximum) {
+    throw new RunOnceConfigError(`${name} must not exceed ${maximum}`);
   }
   return value;
 }
@@ -82,8 +92,11 @@ export async function runOnce(
   const runBatch = dependencies.runBatch ?? runWorkerBatch;
   const repository = createRepository(config.databaseUrl);
 
+  let batchOutcome:
+    | { ok: true; result: BatchResult }
+    | { ok: false; error: unknown };
   try {
-    return await runBatch({
+    const result = await runBatch({
       createHandlers: (enqueue) =>
         createJobHandlers({
           repository,
@@ -100,9 +113,25 @@ export async function runOnce(
       concurrency: config.concurrency,
       deadlineMs: config.deadlineMs,
     });
-  } finally {
-    await repository.close();
+    batchOutcome = { ok: true, result };
+  } catch (error) {
+    batchOutcome = { ok: false, error };
   }
+
+  try {
+    await repository.close();
+  } catch (closeError) {
+    if (!batchOutcome.ok) {
+      throw new AggregateError(
+        [batchOutcome.error, closeError],
+        "WORKER_BATCH_AND_CLOSE_FAILED",
+      );
+    }
+    throw closeError;
+  }
+
+  if (!batchOutcome.ok) throw batchOutcome.error;
+  return batchOutcome.result;
 }
 
 async function main(): Promise<void> {
