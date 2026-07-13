@@ -8,9 +8,12 @@ const specField = z
   .refine((value) => !value.includes("|"), {
     message: "Spec fields cannot contain |",
   })
-  .refine((value) => !["UNDISCLOSED", "PARSE_FAILED"].includes(value), {
-    message: "Spec fields cannot contain unresolved placeholders",
-  });
+  .refine(
+    (value) => !["UNDISCLOSED", "PARSE_FAILED"].includes(value.toUpperCase()),
+    {
+      message: "Spec fields cannot contain unresolved placeholders",
+    },
+  );
 
 export const createSpecSchema = z.object({
   provider: specField,

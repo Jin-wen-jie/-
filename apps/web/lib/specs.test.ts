@@ -70,7 +70,7 @@ describe("spec helpers", () => {
     ).toBe(false);
   });
 
-  it.each(["UNDISCLOSED", "PARSE_FAILED"])(
+  it.each(["UNDISCLOSED", "undisclosed", "PARSE_FAILED", "Parse_Failed"])(
     "rejects the %s placeholder in every free-text field",
     (placeholder) => {
       for (const field of freeTextFields) {
