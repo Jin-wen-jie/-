@@ -11,6 +11,6 @@ COPY apps/worker/package.json apps/worker/
 RUN pnpm install --frozen-lockfile
 
 COPY . .
-RUN pnpm --filter @compare/worker build
+RUN pnpm --filter @compare/worker... build
 
 CMD ["node", "apps/worker/dist/index.js"]

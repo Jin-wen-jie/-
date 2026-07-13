@@ -1,6 +1,6 @@
 import { eq } from "drizzle-orm";
-import type { Db } from "./client";
-import { watchSources } from "./schema";
+import type { Db } from "./client.js";
+import { watchSources } from "./schema.js";
 
 /**
  * K12 教育资格相关的搜索关键词。

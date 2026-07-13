@@ -3,8 +3,17 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "main": "./src/client.ts",
+  "main": "./dist/client.js",
+  "types": "./src/client.ts",
+  "exports": {
+    ".": {
+      "types": "./src/client.ts",
+      "development": "./src/client.ts",
+      "import": "./dist/client.js"
+    }
+  },
   "scripts": {
+    "build": "tsc -p tsconfig.json",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src --max-warnings 0",
     "test": "vitest run",

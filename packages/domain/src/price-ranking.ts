@@ -1,4 +1,4 @@
-import Decimal from "decimal.js";
+import { Decimal } from "decimal.js";
 import type { PriceInput, PriceRow } from "./types.js";
 
 export function rankPrices(rows: PriceInput[], targetQty: number): PriceRow[] {

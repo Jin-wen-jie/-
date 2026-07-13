@@ -1,6 +1,6 @@
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
-import * as schema from "./schema";
+import * as schema from "./schema.js";
 
 export function createDb(databaseUrl: string) {
   const client = postgres(databaseUrl, { max: 10 });
@@ -12,13 +12,13 @@ export type Transaction = Parameters<
   Parameters<Db["transaction"]>[0]
 >[0];
 
-export * from "./schema";
+export * from "./schema.js";
 export { asc, eq, inArray } from "drizzle-orm";
 export {
   bootstrapAdmin,
   hashPassword,
   verifyPassword,
-} from "./bootstrap-admin";
-export { seedWatchSources, INITIAL_WATCH_SOURCES } from "./seed-watch-sources";
-export { seedCandidates, INITIAL_CANDIDATES, KNOWN_PLATFORMS } from "./seed-candidates";
-export { seedSpecs, INITIAL_SPECS, buildComparisonKey } from "./seed-specs";
+} from "./bootstrap-admin.js";
+export { seedWatchSources, INITIAL_WATCH_SOURCES } from "./seed-watch-sources.js";
+export { seedCandidates, INITIAL_CANDIDATES, KNOWN_PLATFORMS } from "./seed-candidates.js";
+export { seedSpecs, INITIAL_SPECS, buildComparisonKey } from "./seed-specs.js";

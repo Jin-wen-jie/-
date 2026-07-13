@@ -1,7 +1,7 @@
 import { eq } from "drizzle-orm";
 import { createHash, randomUUID } from "node:crypto";
-import type { Db } from "./client";
-import { discoveryCandidates } from "./schema";
+import type { Db } from "./client.js";
+import { discoveryCandidates } from "./schema.js";
 
 export interface CandidateSeed {
   productUrl: string;

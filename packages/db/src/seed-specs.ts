@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { buildComparisonKey } from "@compare/domain";
 import type { ComparisonKeyInput } from "@compare/domain";
-import type { Db } from "./client";
-import { productSpecs } from "./schema";
+import type { Db } from "./client.js";
+import { productSpecs } from "./schema.js";
 
 export type SpecSeed = ComparisonKeyInput;
 export { buildComparisonKey };

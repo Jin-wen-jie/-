@@ -1,9 +1,9 @@
 #!/usr/bin/env tsx
 /* eslint-disable no-console */
-import { createDb } from "./client";
-import { seedWatchSources } from "./seed-watch-sources";
-import { seedCandidates } from "./seed-candidates";
-import { seedSpecs } from "./seed-specs";
+import { createDb } from "./client.js";
+import { seedWatchSources } from "./seed-watch-sources.js";
+import { seedCandidates } from "./seed-candidates.js";
+import { seedSpecs } from "./seed-specs.js";
 
 const databaseUrl = process.env.DATABASE_URL;
 if (!databaseUrl) {
