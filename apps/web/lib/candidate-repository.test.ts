@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { PgDialect } from "drizzle-orm/pg-core";
 
 const mocks = vi.hoisted(() => ({
   getDatabase: vi.fn(),
@@ -12,10 +13,8 @@ import { normalizeCandidate } from "./candidate-repository.js";
 
 function createDatabase({
   status,
-  updatedRows = [{ id: "candidate-1" }],
 }: {
   status: string;
-  updatedRows?: Array<{ id: string }>;
 }) {
   const limit = vi
     .fn()
@@ -29,14 +28,28 @@ function createDatabase({
   selectQuery.from.mockReturnValue(selectQuery);
   selectQuery.where.mockReturnValue(selectQuery);
 
-  const returning = vi.fn().mockResolvedValue(updatedRows);
+  const returning = vi.fn().mockResolvedValue([{ id: "candidate-1" }]);
   const updateQuery = {
     set: vi.fn(),
     where: vi.fn(),
     returning,
   };
   updateQuery.set.mockReturnValue(updateQuery);
-  updateQuery.where.mockReturnValue(updateQuery);
+  updateQuery.where.mockImplementation((condition: { getSQL(): unknown }) => {
+    const query = new PgDialect().sqlToQuery(condition.getSQL() as never);
+    const requiredParams = [
+      "candidate-1",
+      "DISCOVERED",
+      "REVIEW_REQUIRED",
+    ];
+    const guardsAgainstStatusRace = requiredParams.every((param) =>
+      query.params.includes(param),
+    );
+    returning.mockResolvedValueOnce(
+      guardsAgainstStatusRace ? [] : [{ id: "candidate-1" }],
+    );
+    return updateQuery;
+  });
 
   const auditValues = vi.fn().mockResolvedValue(undefined);
   const tx = {
@@ -80,7 +93,6 @@ describe("candidate repository normalization", () => {
   it("does not audit when an allowed candidate changes status before update", async () => {
     const database = createDatabase({
       status: "REVIEW_REQUIRED",
-      updatedRows: [],
     });
     mocks.getDatabase.mockReturnValue(database.db);
 

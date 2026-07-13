@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { X } from "lucide-react";
 import type {
   AccessMode,
@@ -79,6 +79,15 @@ const enumOptions: Partial<
   ownership: ownershipOptions,
 };
 
+const focusableSelector = [
+  "a[href]",
+  "button:not([disabled])",
+  "input:not([disabled])",
+  "select:not([disabled])",
+  "textarea:not([disabled])",
+  '[tabindex]:not([tabindex="-1"])',
+].join(",");
+
 export default function SpecNormalizer({
   candidate,
   onClose,
@@ -96,6 +105,19 @@ export default function SpecNormalizer({
   const [creating, setCreating] = useState(false);
   const [normalizing, setNormalizing] = useState(false);
   const [error, setError] = useState("");
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const previouslyFocusedElement = useRef<HTMLElement | null>(null);
+
+  useEffect(() => {
+    const activeElement = document.activeElement;
+    previouslyFocusedElement.current =
+      activeElement instanceof HTMLElement ? activeElement : null;
+    dialogRef.current?.focus();
+
+    return () => {
+      previouslyFocusedElement.current?.focus();
+    };
+  }, []);
 
   // Fetch existing specs on mount
   useEffect(() => {
@@ -193,20 +215,66 @@ export default function SpecNormalizer({
     setForm((prev) => ({ ...prev, [field]: value }));
   }
 
+  function handleDialogKeyDown(event: KeyboardEvent<HTMLDivElement>) {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      onClose();
+      return;
+    }
+    if (event.key !== "Tab") return;
+
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+
+    const focusableElements = Array.from(
+      dialog.querySelectorAll<HTMLElement>(focusableSelector),
+    ).filter((element) => element.tabIndex >= 0);
+    const firstElement = focusableElements[0];
+    const lastElement = focusableElements.at(-1);
+
+    if (!firstElement || !lastElement) {
+      event.preventDefault();
+      dialog.focus();
+      return;
+    }
+    if (
+      event.shiftKey &&
+      (document.activeElement === firstElement || document.activeElement === dialog)
+    ) {
+      event.preventDefault();
+      lastElement.focus();
+    } else if (!event.shiftKey && document.activeElement === lastElement) {
+      event.preventDefault();
+      firstElement.focus();
+    }
+  }
+
   return (
     <div
       className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/50 pt-10"
       onClick={onClose}
     >
       <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="spec-normalizer-title"
+        tabIndex={-1}
         className="mb-10 w-full max-w-2xl rounded-lg bg-white p-6 shadow-xl"
         onClick={(e) => e.stopPropagation()}
+        onKeyDown={handleDialogKeyDown}
       >
         {/* Header */}
         <div className="mb-4 flex items-center justify-between">
-          <h3 className="text-lg font-bold text-gray-900">规格归一化</h3>
+          <h3
+            id="spec-normalizer-title"
+            className="text-lg font-bold text-gray-900"
+          >
+            规格归一化
+          </h3>
           <button
             onClick={onClose}
+            aria-label="Close specification normalization dialog"
             className="rounded-full p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-600"
           >
             <X size={20} />

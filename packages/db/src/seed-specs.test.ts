@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   buildComparisonKey as buildDomainComparisonKey,
   type AccessMode,
@@ -9,7 +9,9 @@ import {
 import {
   INITIAL_SPECS,
   buildComparisonKey,
+  seedSpecs,
 } from "./seed-specs.js";
+import { productSpecs } from "./schema.js";
 
 const DELIVERIES = new Set<Delivery>([
   "ACCOUNT",
@@ -54,5 +56,24 @@ describe("spec seeds", () => {
     expect(
       buildComparisonKey({ ...spec!, quota: `${spec!.quota}-different` }),
     ).not.toBe(buildComparisonKey(spec!));
+  });
+
+  it("inserts seeds atomically and ignores comparison-key conflicts", async () => {
+    const onConflictDoNothing = vi.fn().mockResolvedValue(undefined);
+    const values = vi.fn().mockReturnValue({ onConflictDoNothing });
+    const insert = vi.fn().mockReturnValue({ values });
+    const select = vi.fn(() => {
+      throw new Error("seedSpecs must not query before inserting");
+    });
+
+    await seedSpecs({ insert, select } as never);
+
+    expect(select).not.toHaveBeenCalled();
+    expect(insert).toHaveBeenCalledTimes(INITIAL_SPECS.length);
+    expect(values).toHaveBeenCalledTimes(INITIAL_SPECS.length);
+    expect(onConflictDoNothing).toHaveBeenCalledTimes(INITIAL_SPECS.length);
+    expect(onConflictDoNothing).toHaveBeenCalledWith({
+      target: productSpecs.comparisonKey,
+    });
   });
 });

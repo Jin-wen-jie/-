@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { eq } from "drizzle-orm";
 import { buildComparisonKey } from "@compare/domain";
 import type { ComparisonKeyInput } from "@compare/domain";
 import type { Db } from "./client";
@@ -97,20 +96,15 @@ export async function seedSpecs(db: Db): Promise<void> {
   for (const spec of INITIAL_SPECS) {
     const comparisonKey = buildComparisonKey(spec);
 
-    const [existing] = await db
-      .select({ id: productSpecs.id })
-      .from(productSpecs)
-      .where(eq(productSpecs.comparisonKey, comparisonKey))
-      .limit(1);
-
-    if (existing) continue;
-
-    await db.insert(productSpecs).values({
-      id: randomUUID(),
-      ...spec,
-      comparisonKey,
-      createdAt: new Date(),
-    });
+    await db
+      .insert(productSpecs)
+      .values({
+        id: randomUUID(),
+        ...spec,
+        comparisonKey,
+        createdAt: new Date(),
+      })
+      .onConflictDoNothing({ target: productSpecs.comparisonKey });
   }
 
   // eslint-disable-next-line no-console

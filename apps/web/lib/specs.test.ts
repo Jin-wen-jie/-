@@ -17,6 +17,16 @@ const validSpec: ComparisonKeyInput = {
 };
 
 const fields = Object.keys(validSpec) as Array<keyof ComparisonKeyInput>;
+const freeTextFields = [
+  "provider",
+  "productLine",
+  "plan",
+  "region",
+  "qualification",
+  "validity",
+  "commitment",
+  "quota",
+] as const satisfies readonly (keyof ComparisonKeyInput)[];
 
 describe("spec helpers", () => {
   it("trims every field before returning a valid spec", () => {
@@ -60,7 +70,43 @@ describe("spec helpers", () => {
     ).toBe(false);
   });
 
-  it("includes quota in the display label", () => {
-    expect(formatSpecLabel(validSpec)).toContain(validSpec.quota);
+  it.each(["UNDISCLOSED", "PARSE_FAILED"])(
+    "rejects the %s placeholder in every free-text field",
+    (placeholder) => {
+      for (const field of freeTextFields) {
+        expect(
+          createSpecSchema.safeParse({
+            ...validSpec,
+            [field]: `  ${placeholder}  `,
+          }).success,
+          field,
+        ).toBe(false);
+      }
+    },
+  );
+
+  it("allows the NOT_APPLICABLE domain value", () => {
+    expect(
+      createSpecSchema.safeParse({
+        ...validSpec,
+        ownership: "NOT_APPLICABLE",
+      }).success,
+    ).toBe(true);
+  });
+
+  it("gives every comparison field distinguishing value in the label", () => {
+    const baseline = formatSpecLabel(validSpec);
+
+    for (const field of fields) {
+      const distinguishingValue = `${field}-distinguishing-value`;
+      const changedSpec = {
+        ...validSpec,
+        [field]: distinguishingValue,
+      } as ComparisonKeyInput;
+      const changedLabel = formatSpecLabel(changedSpec);
+
+      expect(changedLabel, field).not.toBe(baseline);
+      expect(changedLabel, field).toContain(distinguishingValue);
+    }
   });
 });

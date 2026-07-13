@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { NextResponse } from "next/server";
-import { buildComparisonKey } from "@compare/domain";
-import { productSpecs } from "@compare/db";
+import { productSpecs, buildComparisonKey } from "@compare/db";
 import { getDatabase } from "../../../lib/database";
 import {
   assertAdminMutation,
