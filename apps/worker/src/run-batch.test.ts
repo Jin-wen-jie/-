@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createJobHandlers,
   PersistedEntityFailure,
@@ -10,7 +10,12 @@ import {
   type BatchQueue,
 } from "./run-batch.js";
 import { parseRunOnceConfig } from "./run-once.js";
-import type { ValidatorResponse } from "./validator-client.js";
+import {
+  validateUrl,
+  ValidatorClientError,
+  ValidatorInfrastructureError,
+  type ValidatorResponse,
+} from "./validator-client.js";
 
 type JobHandlers = ReturnType<typeof createJobHandlers>;
 
@@ -34,18 +39,22 @@ const integrationValidationResult = {
   },
 } satisfies ValidatorResponse;
 
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
 function createRepository(
   overrides: Partial<WorkerRepository> = {},
 ): WorkerRepository {
   return {
     listCandidateIdsForValidation: async () => [],
-    getCandidateForValidation: async () => ({
+    claimCandidateForValidation: async () => ({
       id: "candidate-1",
       productUrl: "https://shop.example/item/1",
+      claimedAt: new Date("2026-07-13T00:00:00.000Z"),
     }),
-    markCandidateValidating: async () => undefined,
-    saveCandidateValidation: async () => undefined,
-    saveCandidateFailure: async () => undefined,
+    saveCandidateValidation: async () => true,
+    saveCandidateFailure: async () => true,
     saveDiscoveredPlatformLinks: async () => [],
     listListingIdsForRevalidation: async () => [],
     getListingForRevalidation: async () => null,
@@ -94,6 +103,112 @@ function createHandlers(
 }
 
 describe("runWorkerBatch", () => {
+  it.each([
+    ["candidate", "401", () => jsonResponse({ error: "UNAUTHORIZED" }, 401)],
+    ["candidate", "connection", () => Promise.reject(new Error("ECONNREFUSED"))],
+    ["candidate", "non-JSON", () => new Response("gateway", { status: 502 })],
+    ["candidate", "invalid 200", () => jsonResponse({ ok: true }, 200)],
+    ["listing", "401", () => jsonResponse({ error: "UNAUTHORIZED" }, 401)],
+    ["listing", "connection", () => Promise.reject(new Error("ECONNREFUSED"))],
+    ["listing", "non-JSON", () => new Response("gateway", { status: 502 })],
+    ["listing", "invalid 200", () => jsonResponse({ ok: true }, 200)],
+  ] as const)(
+    "rejects %s batches on validator %s without persisting entity failure",
+    async (entity, _failure, makeResponse) => {
+      vi.stubGlobal("fetch", vi.fn().mockImplementation(makeResponse));
+      const saveCandidateFailure = vi.fn().mockResolvedValue(true);
+      const saveListingRevalidation = vi.fn().mockResolvedValue(undefined);
+      const repository = createRepository({
+        listCandidateIdsForValidation: async () =>
+          entity === "candidate" ? ["candidate-1"] : [],
+        listListingIdsForRevalidation: async () =>
+          entity === "listing" ? ["listing-1"] : [],
+        getListingForRevalidation: async () => ({
+          id: "listing-1",
+          originalUrl: "https://shop.example/item/1",
+          status: "ACTIVE",
+          consecutiveFailures: 0,
+          lastSuccessAt: null,
+        }),
+        saveCandidateFailure,
+        saveListingRevalidation,
+      });
+
+      const failure = await runWorkerBatch({
+        createHandlers: (enqueue) =>
+          createJobHandlers({
+            repository,
+            validate: (url) =>
+              validateUrl(url, "http://validator.internal", "shared-token"),
+            enqueue,
+          }),
+        candidateLimit: 10,
+        listingLimit: 10,
+        concurrency: 1,
+        deadlineMs: 1_000,
+        now: () => 0,
+      }).catch((error: unknown) => error);
+
+      expect(failure).toBeInstanceOf(ValidatorInfrastructureError);
+      expect(saveCandidateFailure).not.toHaveBeenCalled();
+      expect(saveListingRevalidation).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    ["candidate", "TIMEOUT", 504],
+    ["candidate", "FETCH_ERROR", 502],
+    ["listing", "TIMEOUT", 504],
+    ["listing", "FETCH_ERROR", 502],
+  ] as const)(
+    "counts %s validator %s as an entity failure",
+    async (entity, code, status) => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockResolvedValue(jsonResponse({ error: code, message: code }, status)),
+      );
+      const saveCandidateFailure = vi.fn().mockResolvedValue(true);
+      const saveListingRevalidation = vi.fn().mockResolvedValue(undefined);
+      const repository = createRepository({
+        listCandidateIdsForValidation: async () =>
+          entity === "candidate" ? ["candidate-1"] : [],
+        listListingIdsForRevalidation: async () =>
+          entity === "listing" ? ["listing-1"] : [],
+        getListingForRevalidation: async () => ({
+          id: "listing-1",
+          originalUrl: "https://shop.example/item/1",
+          status: "ACTIVE",
+          consecutiveFailures: 0,
+          lastSuccessAt: null,
+        }),
+        saveCandidateFailure,
+        saveListingRevalidation,
+      });
+
+      const result = await runWorkerBatch({
+        createHandlers: (enqueue) =>
+          createJobHandlers({
+            repository,
+            validate: (url) =>
+              validateUrl(url, "http://validator.internal", "shared-token"),
+            enqueue,
+          }),
+        candidateLimit: 10,
+        listingLimit: 10,
+        concurrency: 1,
+        deadlineMs: 1_000,
+        now: () => 0,
+      });
+
+      expect(result[entity === "candidate" ? "candidates" : "listings"])
+        .toMatchObject({ attempted: 1, failed: 1 });
+      if (entity === "candidate") {
+        expect(saveCandidateFailure).toHaveBeenCalledOnce();
+      } else {
+        expect(saveListingRevalidation).toHaveBeenCalledOnce();
+      }
+    },
+  );
   it.each([
     ["candidateLimit", 0],
     ["candidateLimit", -1],
@@ -362,14 +477,14 @@ describe("runWorkerBatch", () => {
     expect(attemptedCandidates).toEqual(["candidate-1", "candidate-2"]);
   });
 
-  it.each(["get", "save"] as const)(
+  it.each(["claim", "save"] as const)(
     "rejects when candidate repository %s fails",
     async (operation) => {
       const failure = new Error(`candidate repository ${operation} failed`);
       const repository = createRepository({
         listCandidateIdsForValidation: async () => ["candidate-1"],
-        ...(operation === "get"
-          ? { getCandidateForValidation: async () => Promise.reject(failure) }
+        ...(operation === "claim"
+          ? { claimCandidateForValidation: async () => Promise.reject(failure) }
           : { saveCandidateValidation: async () => Promise.reject(failure) }),
       });
 
@@ -408,7 +523,8 @@ describe("runWorkerBatch", () => {
         createHandlers: (enqueue) =>
           createJobHandlers({
             repository,
-            validate: async () => Promise.reject(new Error("timeout")),
+            validate: async () =>
+              Promise.reject(new ValidatorClientError("TIMEOUT", "TIMEOUT")),
             enqueue,
           }),
         candidateLimit: 10,
@@ -520,6 +636,13 @@ describe("runWorkerBatch", () => {
     },
   );
 });
+
+function jsonResponse(body: unknown, status: number): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "content-type": "application/json" },
+  });
+}
 
 describe("parseRunOnceConfig", () => {
   const requiredEnv = {

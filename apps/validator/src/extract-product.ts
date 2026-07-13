@@ -10,6 +10,9 @@ const PLATFORM_RULES = [
   { domain: "gptmf.com", pathPrefixes: ["/buy/"] },
 ] as const;
 
+const MAX_PLATFORM_LINKS = 50;
+const MAX_PLATFORM_URL_LENGTH = 2_048;
+
 export interface ExtractedProduct {
   title: string | null;
   price: string | null;
@@ -78,12 +81,14 @@ function tryJsonLd($: cheerio.CheerioAPI): ExtractedProductDetails | null {
         const offer = (product as Record<string, unknown>)
           .offers as Record<string, unknown> | null;
 
-        const title = (product as Record<string, unknown>).name as
-          | string
-          | null;
-
-        const price = offer?.price as string | null;
-        const currency = offer?.priceCurrency as string | null;
+        const title = nullableString(
+          (product as Record<string, unknown>).name,
+        );
+        const rawPrice = offer?.price;
+        const price = typeof rawPrice === "number" && Number.isFinite(rawPrice)
+          ? String(rawPrice)
+          : nullableString(rawPrice);
+        const currency = nullableString(offer?.priceCurrency);
         const availability = mapAvailability(
           (offer?.availability as string) ?? "",
         );
@@ -95,6 +100,10 @@ function tryJsonLd($: cheerio.CheerioAPI): ExtractedProductDetails | null {
     }
   }
   return null;
+}
+
+function nullableString(value: unknown): string | null {
+  return typeof value === "string" ? value : null;
 }
 
 function tryOpenGraph($: cheerio.CheerioAPI): ExtractedProductDetails {
@@ -221,8 +230,10 @@ function extractPlatformLinks(
   }
 
   $("a[href]").each((_, el) => {
+    if (links.length >= MAX_PLATFORM_LINKS) return false;
     const href = $(el).attr("href");
     if (!href) return;
+    if (href.length > MAX_PLATFORM_URL_LENGTH) return;
 
     try {
       const resolved = new URL(href, pageUrl);
@@ -234,6 +245,7 @@ function extractPlatformLinks(
       // 去掉 fragment 后的规范化 URL
       resolved.hash = "";
       const canonical = resolved.toString();
+      if (canonical.length > MAX_PLATFORM_URL_LENGTH) return;
 
       // 跳过当前页面自身
       if (canonical === canonicalPageUrl) return;

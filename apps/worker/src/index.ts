@@ -50,7 +50,31 @@ export async function startWorker(config: WorkerConfig): Promise<WorkerRuntime> 
   console.log("Worker ready: pg-boss queues and handlers registered");
 
   return {
-    stop: () => boss.stop({ graceful: true, timeout: 30_000 }),
+    async stop() {
+      let bossOutcome:
+        | { ok: true }
+        | { ok: false; error: unknown };
+      try {
+        await boss.stop({ graceful: true, timeout: 30_000 });
+        bossOutcome = { ok: true };
+      } catch (error) {
+        bossOutcome = { ok: false, error };
+      }
+
+      try {
+        await repository.close();
+      } catch (closeError) {
+        if (!bossOutcome.ok) {
+          throw new AggregateError(
+            [bossOutcome.error, closeError],
+            "WORKER_STOP_AND_CLOSE_FAILED",
+          );
+        }
+        throw closeError;
+      }
+
+      if (!bossOutcome.ok) throw bossOutcome.error;
+    },
   };
 }
 

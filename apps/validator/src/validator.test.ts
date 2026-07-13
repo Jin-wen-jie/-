@@ -124,6 +124,15 @@ describe("validator", () => {
     });
   });
 
+  it("normalizes a numeric JSON-LD price to the response string contract", () => {
+    const html =
+      '<script type="application/ld+json">{"@type":"Product","name":"K12","offers":{"@type":"Offer","price":19.99,"priceCurrency":"USD"}}</script>';
+
+    expect(extractProduct(html, "https://shop.example/product").price).toBe(
+      "19.99",
+    );
+  });
+
   it("discovers only valid platform URLs", () => {
     const html = `
       <a href="https://pay.ldxp.cn/shop/store-a">LDXP shop</a>
@@ -157,6 +166,32 @@ describe("validator", () => {
       extractProduct(
         '<a href="#other">Current item</a>',
         "https://pay.ldxp.cn/item/a#current",
+      ),
+    ).toMatchObject({ platformLinks: [] });
+  });
+
+  it("returns at most 50 platform links from a sub-megabyte page", () => {
+    const html = Array.from(
+      { length: 75 },
+      (_, index) =>
+        `<a href="https://pay.ldxp.cn/item/${index}">item ${index}</a>`,
+    ).join("");
+    expect(Buffer.byteLength(html)).toBeLessThan(1024 * 1024);
+
+    const result = extractProduct(html, "https://catalog.example/products");
+
+    expect(result.platformLinks).toHaveLength(50);
+    expect(result.platformLinks[0]).toBe("https://pay.ldxp.cn/item/0");
+    expect(result.platformLinks[49]).toBe("https://pay.ldxp.cn/item/49");
+  });
+
+  it("does not return platform links longer than 2048 characters", () => {
+    const longUrl = `https://pay.ldxp.cn/item/${"x".repeat(2_048)}`;
+
+    expect(
+      extractProduct(
+        `<a href="${longUrl}">oversized item</a>`,
+        "https://catalog.example/products",
       ),
     ).toMatchObject({ platformLinks: [] });
   });

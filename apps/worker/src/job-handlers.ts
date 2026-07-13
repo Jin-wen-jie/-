@@ -1,10 +1,14 @@
 import { transitionListing, type CheckFailureKind } from "./lifecycle.js";
 import { QUEUES } from "./queue.js";
-import type { ValidatorResponse } from "./validator-client.js";
+import {
+  ValidatorClientError,
+  type ValidatorResponse,
+} from "./validator-client.js";
 
 export interface CandidateForValidation {
   id: string;
   productUrl: string;
+  claimedAt: Date;
 }
 
 export interface ListingForRevalidation {
@@ -25,15 +29,19 @@ export interface ListingValidationResult {
 
 export interface WorkerRepository {
   listCandidateIdsForValidation: (limit?: number) => Promise<string[]>;
-  getCandidateForValidation: (
+  claimCandidateForValidation: (
     id: string,
   ) => Promise<CandidateForValidation | null>;
-  markCandidateValidating: (id: string) => Promise<void>;
   saveCandidateValidation: (
     id: string,
     result: ValidatorResponse,
-  ) => Promise<void>;
-  saveCandidateFailure: (id: string, error: unknown) => Promise<void>;
+    claimedAt: Date,
+  ) => Promise<boolean>;
+  saveCandidateFailure: (
+    id: string,
+    error: unknown,
+    claimedAt: Date,
+  ) => Promise<boolean>;
   saveDiscoveredPlatformLinks: (links: string[]) => Promise<string[]>;
   listListingIdsForRevalidation: (limit?: number) => Promise<string[]>;
   getListingForRevalidation: (
@@ -70,24 +78,31 @@ export function createJobHandlers(dependencies: JobHandlerDependencies) {
 
   return {
     async validateCandidate(input: { candidateId: string }) {
-      const candidate = await dependencies.repository.getCandidateForValidation(
+      const candidate = await dependencies.repository.claimCandidateForValidation(
         input.candidateId,
       );
       if (!candidate) return { status: "missing" as const };
 
-      await dependencies.repository.markCandidateValidating(candidate.id);
       let result: ValidatorResponse;
       try {
         result = await dependencies.validate(candidate.productUrl);
       } catch (error) {
-        await dependencies.repository.saveCandidateFailure(candidate.id, error);
+        if (!(error instanceof ValidatorClientError)) throw error;
+        const saved = await dependencies.repository.saveCandidateFailure(
+          candidate.id,
+          error,
+          candidate.claimedAt,
+        );
+        if (saved === false) return { status: "missing" as const };
         throw new PersistedEntityFailure();
       }
 
-      await dependencies.repository.saveCandidateValidation(
+      const saved = await dependencies.repository.saveCandidateValidation(
         candidate.id,
         result,
+        candidate.claimedAt,
       );
+      if (saved === false) return { status: "missing" as const };
       // Discover other shops on the same platform
       const discovered = result.extraction.platformLinks ?? [];
       if (discovered.length > 0) {
@@ -137,6 +152,7 @@ export function createJobHandlers(dependencies: JobHandlerDependencies) {
           failure: null,
         };
       } catch (error) {
+        if (!(error instanceof ValidatorClientError)) throw error;
         outcome = "failed";
         const failureKind = classifyFailure(error);
         const lastSuccessAgeHours = listing.lastSuccessAt

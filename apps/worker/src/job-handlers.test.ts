@@ -4,7 +4,11 @@ import {
   type WorkerRepository,
 } from "./job-handlers.js";
 import { QUEUES } from "./queue.js";
-import type { ValidatorResponse } from "./validator-client.js";
+import {
+  ValidatorClientError,
+  ValidatorInfrastructureError,
+  type ValidatorResponse,
+} from "./validator-client.js";
 
 const validationResult = {
   originalUrl: "https://shop.example/item/1",
@@ -25,17 +29,18 @@ const validationResult = {
     confidence: { title: 1, price: 1, availability: 1 },
   },
 } satisfies ValidatorResponse;
+const candidateClaimedAt = new Date("2026-07-13T00:00:00.000Z");
 
 function createRepository(): WorkerRepository {
   return {
     listCandidateIdsForValidation: vi.fn().mockResolvedValue([]),
-    getCandidateForValidation: vi.fn().mockResolvedValue({
+    claimCandidateForValidation: vi.fn().mockResolvedValue({
       id: "candidate-1",
       productUrl: "https://shop.example/item/1",
+      claimedAt: candidateClaimedAt,
     }),
-    markCandidateValidating: vi.fn().mockResolvedValue(undefined),
-    saveCandidateValidation: vi.fn().mockResolvedValue(undefined),
-    saveCandidateFailure: vi.fn().mockResolvedValue(undefined),
+    saveCandidateValidation: vi.fn().mockResolvedValue(true),
+    saveCandidateFailure: vi.fn().mockResolvedValue(true),
     saveDiscoveredPlatformLinks: vi.fn().mockResolvedValue([]),
     listListingIdsForRevalidation: vi.fn().mockResolvedValue([]),
     getListingForRevalidation: vi.fn().mockResolvedValue(null),
@@ -56,19 +61,20 @@ describe("worker job handlers", () => {
     await expect(
       handlers.validateCandidate({ candidateId: "candidate-1" }),
     ).resolves.toEqual({ status: "validated" });
-    expect(repository.markCandidateValidating).toHaveBeenCalledWith(
+    expect(repository.claimCandidateForValidation).toHaveBeenCalledWith(
       "candidate-1",
     );
     expect(validate).toHaveBeenCalledWith("https://shop.example/item/1");
     expect(repository.saveCandidateValidation).toHaveBeenCalledWith(
       "candidate-1",
       validationResult,
+      candidateClaimedAt,
     );
   });
 
   it("records candidate failures before letting pg-boss retry", async () => {
     const repository = createRepository();
-    const failure = new Error("validator unavailable");
+    const failure = new ValidatorClientError("TIMEOUT", "TIMEOUT");
     const handlers = createJobHandlers({
       repository,
       validate: vi.fn().mockRejectedValue(failure),
@@ -84,7 +90,25 @@ describe("worker job handlers", () => {
     expect(repository.saveCandidateFailure).toHaveBeenCalledWith(
       "candidate-1",
       failure,
+      candidateClaimedAt,
     );
+  });
+
+  it.each([
+    new ValidatorInfrastructureError("VALIDATOR_AUTH_FAILED"),
+    new Error("unknown validator failure"),
+  ])("does not persist candidate infrastructure failures", async (failure) => {
+    const repository = createRepository();
+    const handlers = createJobHandlers({
+      repository,
+      validate: vi.fn().mockRejectedValue(failure),
+      enqueue: vi.fn(),
+    });
+
+    await expect(
+      handlers.validateCandidate({ candidateId: "candidate-1" }),
+    ).rejects.toBe(failure);
+    expect(repository.saveCandidateFailure).not.toHaveBeenCalled();
   });
 
   it("propagates candidate observation persistence failures as fatal", async () => {
@@ -103,30 +127,169 @@ describe("worker job handlers", () => {
     expect(repository.saveCandidateFailure).not.toHaveBeenCalled();
   });
 
-  it.each(["get", "mark"] as const)(
-    "propagates candidate repository %s failures as fatal",
-    async (operation) => {
-      const repository = createRepository();
-      const failure = new Error(`candidate ${operation} failed`);
-      if (operation === "get") {
-        vi.mocked(repository.getCandidateForValidation).mockRejectedValue(
-          failure,
-        );
-      } else {
-        vi.mocked(repository.markCandidateValidating).mockRejectedValue(failure);
-      }
-      const handlers = createJobHandlers({
-        repository,
-        validate: vi.fn().mockResolvedValue(validationResult),
-        enqueue: vi.fn(),
-      });
+  it("propagates candidate claim failures as fatal", async () => {
+    const repository = createRepository();
+    const failure = new Error("candidate claim failed");
+    vi.mocked(repository.claimCandidateForValidation).mockRejectedValue(failure);
+    const handlers = createJobHandlers({
+      repository,
+      validate: vi.fn().mockResolvedValue(validationResult),
+      enqueue: vi.fn(),
+    });
 
-      await expect(
+    await expect(
+      handlers.validateCandidate({ candidateId: "candidate-1" }),
+    ).rejects.toBe(failure);
+    expect(repository.saveCandidateFailure).not.toHaveBeenCalled();
+  });
+
+  it("lets only the atomic claim winner validate a candidate", async () => {
+    const repository = createRepository();
+    vi.mocked(repository.claimCandidateForValidation)
+      .mockResolvedValueOnce({
+        id: "candidate-1",
+        productUrl: "https://shop.example/item/1",
+        claimedAt: candidateClaimedAt,
+      })
+      .mockResolvedValueOnce(null);
+    const validate = vi.fn().mockResolvedValue(validationResult);
+    const handlers = createJobHandlers({
+      repository,
+      validate,
+      enqueue: vi.fn(),
+    });
+
+    await expect(
+      Promise.all([
         handlers.validateCandidate({ candidateId: "candidate-1" }),
-      ).rejects.toBe(failure);
-      expect(repository.saveCandidateFailure).not.toHaveBeenCalled();
-    },
-  );
+        handlers.validateCandidate({ candidateId: "candidate-1" }),
+      ]),
+    ).resolves.toEqual([
+      { status: "validated" },
+      { status: "missing" },
+    ]);
+    expect(validate).toHaveBeenCalledOnce();
+    expect(repository.saveCandidateValidation).toHaveBeenCalledOnce();
+  });
+
+  it("recovers a candidate after an interrupted validation lease expires", async () => {
+    const leasedAt = new Date("2026-07-13T00:00:00.000Z");
+    let now = new Date("2026-07-13T00:04:59.999Z");
+    const repository = createRepository();
+    vi.mocked(repository.claimCandidateForValidation).mockImplementation(
+      async () => {
+        if (now.getTime() - leasedAt.getTime() <= 300_000) return null;
+        return {
+          id: "candidate-1",
+          productUrl: "https://shop.example/item/1",
+          claimedAt: now,
+        };
+      },
+    );
+    const validate = vi.fn().mockResolvedValue(validationResult);
+    const handlers = createJobHandlers({
+      repository,
+      validate,
+      enqueue: vi.fn(),
+    });
+
+    await expect(
+      handlers.validateCandidate({ candidateId: "candidate-1" }),
+    ).resolves.toEqual({ status: "missing" });
+    expect(validate).not.toHaveBeenCalled();
+
+    now = new Date("2026-07-13T00:05:00.001Z");
+    await expect(
+      handlers.validateCandidate({ candidateId: "candidate-1" }),
+    ).resolves.toEqual({ status: "validated" });
+    expect(validate).toHaveBeenCalledOnce();
+  });
+
+  it("lets the renewed lease win when an expired owner finishes later", async () => {
+    const oldClaimedAt = new Date("2026-07-13T00:00:00.000Z");
+    const newClaimedAt = new Date("2026-07-13T00:06:00.000Z");
+    let currentLease = oldClaimedAt;
+    let notifyOldStarted!: () => void;
+    let releaseOld!: () => void;
+    const oldStarted = new Promise<void>((resolve) => {
+      notifyOldStarted = resolve;
+    });
+    const oldRelease = new Promise<void>((resolve) => {
+      releaseOld = resolve;
+    });
+    const repository = createRepository();
+    vi.mocked(repository.claimCandidateForValidation)
+      .mockResolvedValueOnce({
+        id: "candidate-1",
+        productUrl: "https://shop.example/item/1",
+        claimedAt: oldClaimedAt,
+      })
+      .mockResolvedValueOnce({
+        id: "candidate-1",
+        productUrl: "https://shop.example/item/1",
+        claimedAt: newClaimedAt,
+      });
+    const savedLeases: Date[] = [];
+    vi.mocked(repository.saveCandidateValidation).mockImplementation(
+      async (_id, _result, claimedAt) => {
+        if (claimedAt?.getTime() !== currentLease.getTime()) return false;
+        savedLeases.push(claimedAt);
+        return true;
+      },
+    );
+    const oldHandlers = createJobHandlers({
+      repository,
+      validate: vi.fn(async () => {
+        notifyOldStarted();
+        await oldRelease;
+        return validationResult;
+      }),
+      enqueue: vi.fn(),
+    });
+    const newHandlers = createJobHandlers({
+      repository,
+      validate: vi.fn().mockResolvedValue(validationResult),
+      enqueue: vi.fn(),
+    });
+
+    const oldRun = oldHandlers.validateCandidate({ candidateId: "candidate-1" });
+    await oldStarted;
+    currentLease = newClaimedAt;
+    await expect(
+      newHandlers.validateCandidate({ candidateId: "candidate-1" }),
+    ).resolves.toEqual({ status: "validated" });
+    releaseOld();
+
+    await expect(oldRun).resolves.toEqual({ status: "missing" });
+    expect(savedLeases).toEqual([newClaimedAt]);
+  });
+
+  it("stops candidate failure side effects after losing the lease", async () => {
+    const repository = createRepository();
+    const claimedAt = new Date("2026-07-13T00:00:00.000Z");
+    vi.mocked(repository.claimCandidateForValidation).mockResolvedValue({
+      id: "candidate-1",
+      productUrl: "https://shop.example/item/1",
+      claimedAt,
+    });
+    vi.mocked(repository.saveCandidateFailure).mockResolvedValue(false);
+    const handlers = createJobHandlers({
+      repository,
+      validate: vi.fn().mockRejectedValue(
+        new ValidatorClientError("TIMEOUT", "TIMEOUT"),
+      ),
+      enqueue: vi.fn(),
+    });
+
+    await expect(
+      handlers.validateCandidate({ candidateId: "candidate-1" }),
+    ).resolves.toEqual({ status: "missing" });
+    expect(repository.saveCandidateFailure).toHaveBeenCalledWith(
+      "candidate-1",
+      expect.any(ValidatorClientError),
+      claimedAt,
+    );
+  });
 
   it("propagates candidate discovery and enqueue failures as fatal", async () => {
     const discoveryFailure = new Error("candidate discovery write failed");
@@ -175,7 +338,7 @@ describe("worker job handlers", () => {
 
   it("propagates candidate failure persistence errors as fatal", async () => {
     const repository = createRepository();
-    const validatorFailure = new Error("validator timeout");
+    const validatorFailure = new ValidatorClientError("TIMEOUT", "TIMEOUT");
     const persistenceFailure = new Error("candidate failure write failed");
     vi.mocked(repository.saveCandidateFailure).mockRejectedValue(
       persistenceFailure,
@@ -202,7 +365,9 @@ describe("worker job handlers", () => {
     });
     const handlers = createJobHandlers({
       repository,
-      validate: vi.fn().mockRejectedValue(new Error("validator timeout")),
+      validate: vi.fn().mockRejectedValue(
+        new ValidatorClientError("TIMEOUT", "TIMEOUT"),
+      ),
       enqueue: vi.fn(),
       now: () => new Date("2026-07-12T01:00:00.000Z"),
     });
@@ -214,6 +379,30 @@ describe("worker job handlers", () => {
       "listing-1",
       expect.objectContaining({ failureKind: "TIMEOUT" }),
     );
+  });
+
+  it.each([
+    new ValidatorInfrastructureError("VALIDATOR_UNAVAILABLE"),
+    new Error("unknown validator failure"),
+  ])("does not persist listing infrastructure failures", async (failure) => {
+    const repository = createRepository();
+    vi.mocked(repository.getListingForRevalidation).mockResolvedValue({
+      id: "listing-1",
+      originalUrl: "https://shop.example/item/1",
+      status: "ACTIVE",
+      consecutiveFailures: 0,
+      lastSuccessAt: null,
+    });
+    const handlers = createJobHandlers({
+      repository,
+      validate: vi.fn().mockRejectedValue(failure),
+      enqueue: vi.fn(),
+    });
+
+    await expect(
+      handlers.revalidateListing({ listingId: "listing-1" }),
+    ).rejects.toBe(failure);
+    expect(repository.saveListingRevalidation).not.toHaveBeenCalled();
   });
 
   it("returns a succeeded outcome after persisting a listing observation", async () => {
@@ -257,7 +446,9 @@ describe("worker job handlers", () => {
     vi.mocked(repository.saveListingRevalidation).mockRejectedValue(failure);
     const handlers = createJobHandlers({
       repository,
-      validate: vi.fn().mockRejectedValue(new Error("validator timeout")),
+      validate: vi.fn().mockRejectedValue(
+        new ValidatorClientError("TIMEOUT", "TIMEOUT"),
+      ),
       enqueue: vi.fn(),
     });
 

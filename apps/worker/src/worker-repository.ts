@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import {
+  and,
   asc,
   createDb,
   discoveryCandidates,
@@ -8,6 +9,8 @@ import {
   linkChecks,
   listingObservations,
   listings,
+  lt,
+  or,
   type Db,
 } from "@compare/db";
 import type { WorkerRepository } from "./job-handlers.js";
@@ -50,62 +53,91 @@ export interface WorkerRepositoryRuntime extends WorkerRepository {
   close: () => Promise<void>;
 }
 
+export const CANDIDATE_VALIDATION_LEASE_MS = 5 * 60 * 1_000;
+const MAX_DISCOVERED_PLATFORM_LINKS = 50;
+const MAX_DISCOVERED_URL_LENGTH = 2_048;
+
+interface WorkerRepositoryOptions {
+  now?: () => Date;
+  candidateLeaseMs?: number;
+}
+
 export function createWorkerRepository(
   databaseUrl: string,
+  options: WorkerRepositoryOptions = {},
 ): WorkerRepositoryRuntime {
   const db = createDb(databaseUrl);
   return {
-    ...createWorkerRepositoryFromDb(db),
+    ...createWorkerRepositoryFromDb(db, options),
     async close() {
       await db.$client.end({ timeout: 5 });
     },
   };
 }
 
-export function createWorkerRepositoryFromDb(db: Db): WorkerRepository {
+export function createWorkerRepositoryFromDb(
+  db: Db,
+  options: WorkerRepositoryOptions = {},
+): WorkerRepository {
+  const now = options.now ?? (() => new Date());
+  const candidateLeaseMs = options.candidateLeaseMs ??
+    CANDIDATE_VALIDATION_LEASE_MS;
+  const candidateIsClaimable = (referenceTime: Date) =>
+    or(
+      inArray(discoveryCandidates.status, ["DISCOVERED", "RETRY_WAIT"]),
+      and(
+        eq(discoveryCandidates.status, "VALIDATING"),
+        lt(
+          discoveryCandidates.updatedAt,
+          new Date(referenceTime.getTime() - candidateLeaseMs),
+        ),
+      ),
+    );
+
   return {
     async listCandidateIdsForValidation(limit = 100) {
       const rows = await db
         .select({ id: discoveryCandidates.id })
         .from(discoveryCandidates)
         .where(
-          inArray(discoveryCandidates.status, ["DISCOVERED", "RETRY_WAIT"]),
+          candidateIsClaimable(now()),
         )
         .orderBy(asc(discoveryCandidates.updatedAt))
         .limit(limit);
       return rows.map((row) => row.id);
     },
 
-    async getCandidateForValidation(id) {
+    async claimCandidateForValidation(id) {
+      const claimedAt = now();
       const [candidate] = await db
-        .select({
+        .update(discoveryCandidates)
+        .set({ status: "VALIDATING", updatedAt: claimedAt })
+        .where(
+          and(
+            eq(discoveryCandidates.id, id),
+            candidateIsClaimable(claimedAt),
+          ),
+        )
+        .returning({
           id: discoveryCandidates.id,
           productUrl: discoveryCandidates.productUrl,
-        })
-        .from(discoveryCandidates)
-        .where(eq(discoveryCandidates.id, id))
-        .limit(1);
+          claimedAt: discoveryCandidates.updatedAt,
+        });
       return candidate ?? null;
     },
 
-    async markCandidateValidating(id) {
-      await db
-        .update(discoveryCandidates)
-        .set({ status: "VALIDATING", updatedAt: new Date() })
-        .where(eq(discoveryCandidates.id, id));
-    },
-
-    async saveCandidateValidation(id, result) {
+    async saveCandidateValidation(id, result, claimedAt) {
       const observedAt = new Date();
-      await db.transaction(async (tx) => {
+      return db.transaction(async (tx) => {
+        const ownership = candidateLeaseOwnership(id, claimedAt);
         const [candidate] = await tx
           .select({ extractionResult: discoveryCandidates.extractionResult })
           .from(discoveryCandidates)
-          .where(eq(discoveryCandidates.id, id))
+          .where(ownership)
           .limit(1);
-        if (!candidate) return;
+        if (!candidate) return false;
 
-        await tx
+        const [updated] = await tx
           .update(discoveryCandidates)
           .set({
             finalUrl: result.finalUrl,
@@ -117,7 +149,9 @@ export function createWorkerRepositoryFromDb(db: Db): WorkerRepository {
             ),
             updatedAt: observedAt,
           })
-          .where(eq(discoveryCandidates.id, id));
+          .where(ownership)
+          .returning({ id: discoveryCandidates.id });
+        if (!updated) return false;
         await tx.insert(linkChecks).values({
           id: randomUUID(),
           candidateId: id,
@@ -129,24 +163,20 @@ export function createWorkerRepositoryFromDb(db: Db): WorkerRepository {
           elapsedMs: result.elapsedMs,
           checkedAt: observedAt,
         });
+        return true;
       });
     },
 
-    async saveCandidateFailure(id, error) {
+    async saveCandidateFailure(id, error, claimedAt) {
       const checkedAt = new Date();
       const failure = describeFailure(error);
-      await db.transaction(async (tx) => {
+      return db.transaction(async (tx) => {
         const [candidate] = await tx
-          .select({ productUrl: discoveryCandidates.productUrl })
-          .from(discoveryCandidates)
-          .where(eq(discoveryCandidates.id, id))
-          .limit(1);
-        if (!candidate) return;
-
-        await tx
           .update(discoveryCandidates)
           .set({ status: "RETRY_WAIT", updatedAt: checkedAt })
-          .where(eq(discoveryCandidates.id, id));
+          .where(candidateLeaseOwnership(id, claimedAt))
+          .returning({ productUrl: discoveryCandidates.productUrl });
+        if (!candidate) return false;
         await tx.insert(linkChecks).values({
           id: randomUUID(),
           candidateId: id,
@@ -155,6 +185,7 @@ export function createWorkerRepositoryFromDb(db: Db): WorkerRepository {
           failureDetail: failure.message,
           checkedAt,
         });
+        return true;
       });
     },
 
@@ -187,9 +218,18 @@ export function createWorkerRepositoryFromDb(db: Db): WorkerRepository {
 
     async saveDiscoveredPlatformLinks(links) {
       const insertedIds: string[] = [];
+      const seen = new Set<string>();
       const now = new Date();
-      for (const url of links) {
+      for (const url of links.slice(0, MAX_DISCOVERED_PLATFORM_LINKS)) {
+        if (url.length > MAX_DISCOVERED_URL_LENGTH) continue;
         const canonicalUrl = canonicalizeUrl(url);
+        if (
+          canonicalUrl.length > MAX_DISCOVERED_URL_LENGTH ||
+          seen.has(canonicalUrl)
+        ) {
+          continue;
+        }
+        seen.add(canonicalUrl);
         const urlFingerprint = fingerprintUrl(canonicalUrl);
         const id = randomUUID();
         const [inserted] = await db
@@ -280,6 +320,14 @@ export function createWorkerRepositoryFromDb(db: Db): WorkerRepository {
       });
     },
   };
+}
+
+function candidateLeaseOwnership(id: string, claimedAt: Date) {
+  return and(
+    eq(discoveryCandidates.id, id),
+    eq(discoveryCandidates.status, "VALIDATING"),
+    eq(discoveryCandidates.updatedAt, claimedAt),
+  );
 }
 
 function stockEvidence(result: ValidatorResponse) {

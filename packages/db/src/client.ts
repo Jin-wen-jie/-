@@ -3,7 +3,16 @@ import postgres from "postgres";
 import * as schema from "./schema.js";
 
 export function createDb(databaseUrl: string) {
-  const client = postgres(databaseUrl, { max: 10 });
+  const client = postgres(databaseUrl, {
+    max: 10,
+    connect_timeout: 10,
+    prepare: true,
+    connection: {
+      statement_timeout: 30_000,
+      lock_timeout: 5_000,
+      idle_in_transaction_session_timeout: 30_000,
+    },
+  });
   return drizzle(client, { schema });
 }
 
@@ -13,7 +22,7 @@ export type Transaction = Parameters<
 >[0];
 
 export * from "./schema.js";
-export { asc, eq, inArray } from "drizzle-orm";
+export { and, asc, eq, inArray, lt, or } from "drizzle-orm";
 export {
   bootstrapAdmin,
   hashPassword,
