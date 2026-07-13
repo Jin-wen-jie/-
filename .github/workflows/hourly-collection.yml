@@ -17,8 +17,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
-      DATABASE_URL: ${{ secrets.DATABASE_URL }}
-      VALIDATOR_SHARED_TOKEN: ${{ secrets.VALIDATOR_SHARED_TOKEN }}
       VALIDATOR_BASE_URL: http://127.0.0.1:3001
       CANDIDATE_LIMIT: "50"
       LISTING_LIMIT: "50"
@@ -26,13 +24,13 @@ jobs:
       WORKER_DEADLINE_MS: "1500000"
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: Set up pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "24"
           cache: pnpm
@@ -46,19 +44,31 @@ jobs:
           pnpm --filter @compare/validator build
 
       - name: Migrate database
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: pnpm db:migrate
 
       - name: Seed database
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: pnpm db:seed
 
       - name: Run bounded collection
         shell: bash
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          VALIDATOR_SHARED_TOKEN: ${{ secrets.VALIDATOR_SHARED_TOKEN }}
         run: |
           set -euo pipefail
 
           validator_pid=""
+          worker_pid=""
 
           cleanup() {
+            if [[ -n "${worker_pid}" ]]; then
+              kill "${worker_pid}" 2>/dev/null || true
+              wait "${worker_pid}" 2>/dev/null || true
+            fi
             if [[ -n "${validator_pid}" ]]; then
               kill "${validator_pid}" 2>/dev/null || true
               wait "${validator_pid}" 2>/dev/null || true
@@ -71,6 +81,7 @@ jobs:
           validator_pid=$!
 
           deadline=$((SECONDS + 30))
+          validator_healthy=false
           while (( SECONDS < deadline )); do
             if ! kill -0 "${validator_pid}" 2>/dev/null; then
               echo "Validator exited before becoming healthy." >&2
@@ -79,8 +90,8 @@ jobs:
 
             if curl --fail --silent --show-error --max-time 1 \
               http://127.0.0.1:3001/health >/dev/null; then
-              pnpm --filter @compare/worker run-once
-              exit 0
+              validator_healthy=true
+              break
             fi
 
             if (( SECONDS < deadline )); then
@@ -88,5 +99,40 @@ jobs:
             fi
           done
 
-          echo "Validator health check timed out after 30 seconds." >&2
-          exit 1
+          if [[ "${validator_healthy}" != "true" ]]; then
+            echo "Validator health check timed out after 30 seconds." >&2
+            exit 1
+          fi
+
+          pnpm --filter @compare/worker run-once \
+            >"${RUNNER_TEMP}/worker.log" 2>&1 &
+          worker_pid=$!
+
+          while true; do
+            if ! kill -0 "${validator_pid}" 2>/dev/null; then
+              echo "Validator exited while the worker was running." >&2
+              exit 1
+            fi
+
+            if ! kill -0 "${worker_pid}" 2>/dev/null; then
+              if wait "${worker_pid}"; then
+                worker_status=0
+              else
+                worker_status=$?
+              fi
+              worker_pid=""
+
+              if (( worker_status != 0 )); then
+                exit "${worker_status}"
+              fi
+
+              if ! kill -0 "${validator_pid}" 2>/dev/null; then
+                echo "Validator exited before worker completion was confirmed." >&2
+                exit 1
+              fi
+
+              exit 0
+            fi
+
+            sleep 1
+          done

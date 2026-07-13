@@ -7,6 +7,7 @@ interface WorkflowStep {
   uses?: string;
   run?: string;
   with?: Record<string, string>;
+  env?: Record<string, string>;
 }
 
 interface HourlyWorkflow {
@@ -57,34 +58,78 @@ describe("hourly collection workflow", () => {
     expect(collect["timeout-minutes"]).toBe(30);
   });
 
-  it("uses only repository secrets plus fixed collection limits", () => {
+  it("keeps only non-sensitive collection limits at job scope", () => {
     expect(collect.env).toEqual({
-      DATABASE_URL: "${{ secrets.DATABASE_URL }}",
-      VALIDATOR_SHARED_TOKEN: "${{ secrets.VALIDATOR_SHARED_TOKEN }}",
       VALIDATOR_BASE_URL: "http://127.0.0.1:3001",
       CANDIDATE_LIMIT: "50",
       LISTING_LIMIT: "50",
       WORKER_CONCURRENCY: "4",
       WORKER_DEADLINE_MS: "1500000",
     });
+  });
+
+  it("scopes each secret to only the steps that need it", () => {
+    for (const name of [
+      "Check out repository",
+      "Set up pnpm",
+      "Set up Node.js",
+      "Install dependencies",
+      "Build worker and validator",
+    ]) {
+      expect(stepNamed(name).env).toBeUndefined();
+    }
+
+    expect(stepNamed("Migrate database").env).toEqual({
+      DATABASE_URL: "${{ secrets.DATABASE_URL }}",
+    });
+    expect(stepNamed("Seed database").env).toEqual({
+      DATABASE_URL: "${{ secrets.DATABASE_URL }}",
+    });
+    expect(stepNamed("Run bounded collection").env).toEqual({
+      DATABASE_URL: "${{ secrets.DATABASE_URL }}",
+      VALIDATOR_SHARED_TOKEN: "${{ secrets.VALIDATOR_SHARED_TOKEN }}",
+    });
 
     const serialized = JSON.stringify(workflow);
     expect(serialized).toContain("secrets.DATABASE_URL");
     expect(serialized).toContain("secrets.VALIDATOR_SHARED_TOKEN");
+    const secretReferences = collect.steps.flatMap((step) =>
+      Object.values(step.env ?? {}).filter((value) => value.includes("secrets.")),
+    );
+    expect(secretReferences).toHaveLength(4);
+    expect(new Set(secretReferences)).toEqual(
+      new Set([
+        "${{ secrets.DATABASE_URL }}",
+        "${{ secrets.VALIDATOR_SHARED_TOKEN }}",
+      ]),
+    );
+    expect(workflowText).not.toMatch(/postgres(?:ql)?:\/\//i);
     expect(serialized).toContain("http://127.0.0.1:3001/health");
     expect(serialized).toContain("pnpm --filter @compare/worker run-once");
   });
 
-  it("pins setup actions and installs from the frozen lockfile", () => {
-    expect(collect.steps.filter((step) => step.uses).map((step) => step.uses)).toEqual([
-      "actions/checkout@v4",
-      "pnpm/action-setup@v4",
-      "actions/setup-node@v4",
+  it("pins only approved setup actions to immutable commits", () => {
+    const actionUses = collect.steps.flatMap((step) =>
+      step.uses ? [step.uses] : [],
+    );
+    expect(actionUses.map((uses) => uses.split("@")[0])).toEqual([
+      "actions/checkout",
+      "pnpm/action-setup",
+      "actions/setup-node",
     ]);
+    for (const uses of actionUses) {
+      expect(uses).toMatch(
+        /^(?:actions\/checkout|pnpm\/action-setup|actions\/setup-node)@[0-9a-f]{40}$/,
+      );
+      expect(uses).not.toContain("@v4");
+      expect(workflowText).toContain(`uses: ${uses} # v4`);
+    }
+
     expect(stepNamed("Set up Node.js").with).toEqual({
       "node-version": "24",
       cache: "pnpm",
     });
+    expect(stepNamed("Set up pnpm").with).toBeUndefined();
     expect(stepNamed("Install dependencies").run).toBe(
       "pnpm install --frozen-lockfile",
     );
@@ -114,9 +159,49 @@ describe("hourly collection workflow", () => {
     expect(collection).toContain("pnpm --filter @compare/validator start");
     expect(collection).toContain("http://127.0.0.1:3001/health");
     expect(collection).toContain("pnpm --filter @compare/worker run-once");
-    expect(collection).toContain("kill \"${validator_pid}\"");
-    expect(collection).toContain("wait \"${validator_pid}\"");
-    expect(collection).toContain("exit 1");
+    expect(collection).toContain('worker_pid=""');
+
+    const cleanup = collection?.slice(
+      collection.indexOf("cleanup()"),
+      collection.indexOf("trap cleanup EXIT"),
+    );
+    for (const pid of ["worker_pid", "validator_pid"]) {
+      expect(cleanup).toContain(`kill "${"${"}${pid}}" 2>/dev/null || true`);
+      expect(cleanup).toContain(`wait "${"${"}${pid}}" 2>/dev/null || true`);
+    }
+
+    const workerStartIndex = collection?.indexOf(
+      "pnpm --filter @compare/worker run-once",
+    );
+    expect(workerStartIndex).toBeGreaterThan(-1);
+    const runtimeMonitor = collection?.slice(workerStartIndex);
+    expect(runtimeMonitor).toContain("worker_pid=$!");
+
+    const validatorCheckIndex = runtimeMonitor?.indexOf(
+      'if ! kill -0 "${validator_pid}" 2>/dev/null; then',
+    );
+    const workerCheckIndex = runtimeMonitor?.indexOf(
+      'if ! kill -0 "${worker_pid}" 2>/dev/null; then',
+    );
+    expect(validatorCheckIndex).toBeGreaterThan(-1);
+    expect(workerCheckIndex).toBeGreaterThan(validatorCheckIndex ?? -1);
+    expect(runtimeMonitor?.slice(validatorCheckIndex, workerCheckIndex)).toContain(
+      "exit 1",
+    );
+
+    const statusHandling = runtimeMonitor?.slice(workerCheckIndex);
+    expect(statusHandling).toContain('if wait "${worker_pid}"; then');
+    expect(statusHandling).toContain("worker_status=0");
+    expect(statusHandling).toContain("worker_status=$?");
+    expect(statusHandling).toContain('exit "${worker_status}"');
+    expect(statusHandling).not.toContain(
+      'wait "${worker_pid}" 2>/dev/null || true',
+    );
+
+    const workerStatusIndex = statusHandling?.indexOf("worker_status=$?") ?? -1;
+    expect(statusHandling?.indexOf('kill -0 "${validator_pid}"', workerStatusIndex)).toBeGreaterThan(
+      workerStatusIndex,
+    );
     expect(collection).not.toContain("DATABASE_URL");
     expect(collection).not.toContain("VALIDATOR_SHARED_TOKEN");
   });
