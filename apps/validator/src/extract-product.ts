@@ -4,11 +4,11 @@ import * as cheerio from "cheerio";
  * 已知的发卡平台域名列表。
  * 当抓取这些域名下的页面时，会额外提取同平台其他店铺链接。
  */
-const KNOWN_PLATFORMS: string[] = [
-  "ldxp.cn",
-  "codesky.qzz.io",
-  "gptmf.com",
-];
+const PLATFORM_RULES = [
+  { domain: "ldxp.cn", pathPrefixes: ["/shop/", "/item/"] },
+  { domain: "codesky.qzz.io", pathPrefixes: ["/item/"] },
+  { domain: "gptmf.com", pathPrefixes: ["/buy/"] },
+] as const;
 
 export interface ExtractedProduct {
   title: string | null;
@@ -219,19 +219,9 @@ function extractPlatformLinks(
       const resolved = new URL(href, pageUrl);
 
       // 只关注已知平台域名
-      if (!KNOWN_PLATFORMS.some((platform) =>
-        resolved.hostname === platform ||
-        resolved.hostname.endsWith(`.${platform}`)
-      )) return;
+      if (!matchesPlatformRule(resolved)) return;
 
       // 关注店铺或商品页路径（不同平台模式不同）
-      const isShopPage =
-        resolved.pathname.startsWith("/shop/") ||
-        resolved.pathname.startsWith("/item/") ||
-        resolved.pathname.startsWith("/buy/");
-
-      if (!isShopPage) return;
-
       // 去掉 fragment 后的规范化 URL
       resolved.hash = "";
       const canonical = resolved.toString();
@@ -249,6 +239,26 @@ function extractPlatformLinks(
   });
 
   return links;
+}
+
+function matchesPlatformRule(url: URL): boolean {
+  if (url.protocol !== "http:" && url.protocol !== "https:") return false;
+  if (url.username || url.password) return false;
+
+  const hasAllowedPort =
+    url.port === "" ||
+    (url.protocol === "http:" && url.port === "80") ||
+    (url.protocol === "https:" && url.port === "443");
+  if (!hasAllowedPort) return false;
+
+  const rule = PLATFORM_RULES.find(
+    ({ domain }) =>
+      url.hostname === domain || url.hostname.endsWith(`.${domain}`),
+  );
+
+  return rule?.pathPrefixes.some((prefix) =>
+    url.pathname.startsWith(prefix)
+  ) ?? false;
 }
 
 function hashString(s: string): string {

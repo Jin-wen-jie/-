@@ -124,11 +124,18 @@ describe("validator", () => {
     });
   });
 
-  it("discovers new platform paths without trusting lookalike domains", () => {
+  it("discovers only valid platform URLs", () => {
     const html = `
+      <a href="https://pay.ldxp.cn/shop/store-a">LDXP shop</a>
+      <a href="https://pay.ldxp.cn/item/item-a">LDXP item</a>
       <a href="https://store.codesky.qzz.io/item/8">Codesky item</a>
       <a href="https://store.codesky.qzz.io/item/8#details">Duplicate item</a>
       <a href="https://shop.gptmf.com/buy/26">GPTMF product</a>
+      <a href="ftp://pay.ldxp.cn/item/evil">Unsupported protocol</a>
+      <a href="https://store.codesky.qzz.io/buy/1">Wrong Codesky path</a>
+      <a href="https://shop.gptmf.com/item/1">Wrong GPTMF path</a>
+      <a href="https://user:pass@pay.ldxp.cn/item/secret">URL credentials</a>
+      <a href="https://pay.ldxp.cn:8443/item/port">Non-standard port</a>
       <a href="https://evilgptmf.com/buy/99">Lookalike GPTMF domain</a>
       <a href="https://notldxp.cn/shop/fake">Lookalike LDXP domain</a>
     `;
@@ -137,6 +144,8 @@ describe("validator", () => {
       extractProduct(html, "https://catalog.example/products"),
     ).toMatchObject({
       platformLinks: [
+        "https://pay.ldxp.cn/shop/store-a",
+        "https://pay.ldxp.cn/item/item-a",
         "https://store.codesky.qzz.io/item/8",
         "https://shop.gptmf.com/buy/26",
       ],
