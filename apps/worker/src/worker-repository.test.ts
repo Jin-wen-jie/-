@@ -1,6 +1,7 @@
 import {
   createDb,
   discoveryCandidates,
+  linkChecks,
   type Db,
 } from "@compare/db";
 import { describe, expect, it, vi } from "vitest";
@@ -110,7 +111,9 @@ describe("worker repository mappings", () => {
       const saved = outcome === "success"
         ? await repository.saveCandidateValidation(
           "candidate-1",
-          repositoryValidationResult,
+          validationWithPlatformLinks([
+            "https://pay.ldxp.cn/item/stale-owner",
+          ]),
           claimedAt,
         )
         : await repository.saveCandidateFailure(
@@ -119,7 +122,11 @@ describe("worker repository mappings", () => {
           claimedAt,
         );
 
-      expect(saved).toBe(false);
+      if (outcome === "success") {
+        expect(saved).toEqual({ saved: false, discoveredIds: [] });
+      } else {
+        expect(saved).toBe(false);
+      }
       expect(insert).not.toHaveBeenCalled();
       expect(returning).toHaveBeenCalledOnce();
       expectSqlCondition(updateWhere.mock.calls[0]?.[0], {
@@ -134,6 +141,125 @@ describe("worker repository mappings", () => {
       });
     },
   );
+
+  it("rolls back candidate completion when the second discovery insert fails", async () => {
+    const discoveryFailure = new Error("second discovery insert failed");
+    let persistedStatus = "VALIDATING";
+    let pendingStatus = persistedStatus;
+    let rolledBack = false;
+    const limit = vi.fn().mockResolvedValue([{ extractionResult: {} }]);
+    const selectWhere = vi.fn().mockReturnValue({ limit });
+    const from = vi.fn().mockReturnValue({ where: selectWhere });
+    const select = vi.fn().mockReturnValue({ from });
+    const updateReturning = vi.fn().mockResolvedValue([{ id: "candidate-1" }]);
+    const updateWhere = vi.fn().mockReturnValue({ returning: updateReturning });
+    const set = vi.fn((value: { status: string }) => {
+      pendingStatus = value.status;
+      return { where: updateWhere };
+    });
+    const update = vi.fn().mockReturnValue({ set });
+    const linkCheckValues = vi.fn().mockResolvedValue(undefined);
+    const discoveryReturning = vi.fn()
+      .mockResolvedValueOnce([{ id: "candidate-new-1" }])
+      .mockRejectedValueOnce(discoveryFailure);
+    const onConflictDoNothing = vi.fn().mockReturnValue({
+      returning: discoveryReturning,
+    });
+    const discoveryValues = vi.fn().mockReturnValue({ onConflictDoNothing });
+    const insert = vi.fn((table: unknown) =>
+      table === linkChecks
+        ? { values: linkCheckValues }
+        : { values: discoveryValues });
+    const tx = { select, update, insert };
+    const transaction = vi.fn(async (
+      operation: (transaction: typeof tx) => Promise<unknown>,
+    ) => {
+      try {
+        const result = await operation(tx);
+        persistedStatus = pendingStatus;
+        return result;
+      } catch (error) {
+        pendingStatus = persistedStatus;
+        rolledBack = true;
+        throw error;
+      }
+    });
+    const repository = createWorkerRepositoryFromDb({
+      transaction,
+    } as unknown as Db);
+    const result = {
+      ...repositoryValidationResult,
+      extraction: {
+        ...repositoryValidationResult.extraction,
+        platformLinks: [
+          "https://pay.ldxp.cn/item/new-1",
+          "https://pay.ldxp.cn/item/new-2",
+        ],
+      },
+    } satisfies ValidatorResponse;
+
+    await expect(repository.saveCandidateValidation(
+      "candidate-1",
+      result,
+      new Date("2026-07-13T00:00:00.000Z"),
+    )).rejects.toBe(discoveryFailure);
+
+    expect(transaction).toHaveBeenCalledOnce();
+    expect(discoveryReturning).toHaveBeenCalledTimes(2);
+    expect(rolledBack).toBe(true);
+    expect(persistedStatus).toBe("VALIDATING");
+  });
+
+  it("returns exactly the conflict-safe discovered ids from the candidate transaction", async () => {
+    const limit = vi.fn().mockResolvedValue([{ extractionResult: {} }]);
+    const selectWhere = vi.fn().mockReturnValue({ limit });
+    const from = vi.fn().mockReturnValue({ where: selectWhere });
+    const select = vi.fn().mockReturnValue({ from });
+    const updateReturning = vi.fn().mockResolvedValue([{ id: "candidate-1" }]);
+    const updateWhere = vi.fn().mockReturnValue({ returning: updateReturning });
+    const set = vi.fn().mockReturnValue({ where: updateWhere });
+    const update = vi.fn().mockReturnValue({ set });
+    const linkCheckValues = vi.fn().mockResolvedValue(undefined);
+    const discoveryReturning = vi.fn()
+      .mockResolvedValueOnce([{ id: "candidate-new-1" }])
+      .mockResolvedValueOnce([{ id: "candidate-new-2" }]);
+    const onConflictDoNothing = vi.fn().mockReturnValue({
+      returning: discoveryReturning,
+    });
+    const discoveryValues = vi.fn().mockReturnValue({ onConflictDoNothing });
+    const insert = vi.fn((table: unknown) =>
+      table === linkChecks
+        ? { values: linkCheckValues }
+        : { values: discoveryValues });
+    const tx = { select, update, insert };
+    const repository = createWorkerRepositoryFromDb({
+      transaction: vi.fn(async (
+        operation: (transaction: typeof tx) => Promise<unknown>,
+      ) => operation(tx)),
+    } as unknown as Db);
+    const result = {
+      ...repositoryValidationResult,
+      extraction: {
+        ...repositoryValidationResult.extraction,
+        platformLinks: [
+          "https://pay.ldxp.cn/item/new-1#first",
+          "https://pay.ldxp.cn/item/new-1#duplicate",
+          "https://store.codesky.qzz.io/item/new-2",
+        ],
+      },
+    } satisfies ValidatorResponse;
+
+    await expect(repository.saveCandidateValidation(
+      "candidate-1",
+      result,
+      new Date("2026-07-13T00:00:00.000Z"),
+    )).resolves.toEqual({
+      saved: true,
+      discoveredIds: ["candidate-new-1", "candidate-new-2"],
+    });
+    expect(discoveryReturning).toHaveBeenCalledTimes(2);
+    expect(onConflictDoNothing).toHaveBeenCalledTimes(2);
+  });
 
   it("lists pending and expired validating candidates but excludes fresh leases", async () => {
     const limit = vi.fn().mockResolvedValue([
@@ -193,67 +319,64 @@ describe("worker repository mappings", () => {
   });
 
   it("returns only ids won by conflict-safe discovered-link inserts", async () => {
-    const limit = vi.fn().mockResolvedValue([]);
-    const where = vi.fn().mockReturnValue({ limit });
-    const from = vi.fn().mockReturnValue({ where });
-    const select = vi.fn().mockReturnValue({ from });
     const returning = vi.fn()
       .mockResolvedValueOnce([{ id: "candidate-winner" }])
       .mockResolvedValueOnce([]);
-    const onConflictDoNothing = vi.fn().mockReturnValue({ returning });
-    const values = vi.fn().mockReturnValue({ onConflictDoNothing });
-    const db = {
-      select,
-      insert: vi.fn().mockReturnValue({ values }),
-    } as unknown as Db;
-    const repository = createWorkerRepositoryFromDb(db);
-
-    const insertedIds = await repository.saveDiscoveredPlatformLinks([
-      "https://shop.example/item/new-1",
-      "https://shop.example/item/new-1",
+    const harness = createCandidateSaveHarness(returning);
+    const repository = createWorkerRepositoryFromDb(harness.db);
+    const result = validationWithPlatformLinks([
+      "https://pay.ldxp.cn/item/new-1",
+      "https://pay.ldxp.cn/item/new-2",
     ]);
 
-    expect(insertedIds).toEqual(["candidate-winner"]);
-    expect(onConflictDoNothing).toHaveBeenCalledOnce();
-    expect(onConflictDoNothing).toHaveBeenCalledWith({
+    await expect(repository.saveCandidateValidation(
+      "candidate-1",
+      result,
+      new Date("2026-07-13T00:00:00.000Z"),
+    )).resolves.toEqual({
+      saved: true,
+      discoveredIds: ["candidate-winner"],
+    });
+    expect(harness.onConflictDoNothing).toHaveBeenCalledTimes(2);
+    expect(harness.onConflictDoNothing).toHaveBeenCalledWith({
       target: discoveryCandidates.urlFingerprint,
     });
     expect(returning).toHaveBeenCalledWith({ id: discoveryCandidates.id });
-    expect(select).not.toHaveBeenCalled();
   });
 
   it("attempts at most 50 discovered-link inserts", async () => {
     const returning = vi.fn().mockResolvedValue([]);
-    const onConflictDoNothing = vi.fn().mockReturnValue({ returning });
-    const values = vi.fn().mockReturnValue({ onConflictDoNothing });
-    const db = {
-      insert: vi.fn().mockReturnValue({ values }),
-    } as unknown as Db;
-    const repository = createWorkerRepositoryFromDb(db);
+    const harness = createCandidateSaveHarness(returning);
+    const repository = createWorkerRepositoryFromDb(harness.db);
 
-    await repository.saveDiscoveredPlatformLinks(
+    await repository.saveCandidateValidation(
+      "candidate-1",
+      validationWithPlatformLinks(
       Array.from(
         { length: 60 },
         (_, index) => `https://pay.ldxp.cn/item/${index}`,
       ),
+      ),
+      new Date("2026-07-13T00:00:00.000Z"),
     );
 
-    expect(values).toHaveBeenCalledTimes(50);
-    expect(onConflictDoNothing).toHaveBeenCalledTimes(50);
+    expect(harness.discoveryValues).toHaveBeenCalledTimes(50);
+    expect(harness.onConflictDoNothing).toHaveBeenCalledTimes(50);
   });
 
   it("skips discovered links longer than 2048 characters", async () => {
-    const values = vi.fn();
-    const db = {
-      insert: vi.fn().mockReturnValue({ values }),
-    } as unknown as Db;
-    const repository = createWorkerRepositoryFromDb(db);
+    const harness = createCandidateSaveHarness();
+    const repository = createWorkerRepositoryFromDb(harness.db);
 
-    await expect(repository.saveDiscoveredPlatformLinks([
-      `https://pay.ldxp.cn/item/${"x".repeat(2_048)}`,
-    ])).resolves.toEqual([]);
+    await expect(repository.saveCandidateValidation(
+      "candidate-1",
+      validationWithPlatformLinks([
+        `https://pay.ldxp.cn/item/${"x".repeat(2_048)}`,
+      ]),
+      new Date("2026-07-13T00:00:00.000Z"),
+    )).resolves.toEqual({ saved: true, discoveredIds: [] });
 
-    expect(values).not.toHaveBeenCalled();
+    expect(harness.discoveryValues).not.toHaveBeenCalled();
   });
 
   it("preserves manual investigation evidence when validation refreshes fields", () => {
@@ -295,6 +418,42 @@ describe("worker repository mappings", () => {
     });
   });
 });
+
+function createCandidateSaveHarness(
+  discoveryReturning = vi.fn().mockResolvedValue([]),
+) {
+  const limit = vi.fn().mockResolvedValue([{ extractionResult: {} }]);
+  const selectWhere = vi.fn().mockReturnValue({ limit });
+  const from = vi.fn().mockReturnValue({ where: selectWhere });
+  const select = vi.fn().mockReturnValue({ from });
+  const updateReturning = vi.fn().mockResolvedValue([{ id: "candidate-1" }]);
+  const updateWhere = vi.fn().mockReturnValue({ returning: updateReturning });
+  const set = vi.fn().mockReturnValue({ where: updateWhere });
+  const update = vi.fn().mockReturnValue({ set });
+  const linkCheckValues = vi.fn().mockResolvedValue(undefined);
+  const onConflictDoNothing = vi.fn().mockReturnValue({
+    returning: discoveryReturning,
+  });
+  const discoveryValues = vi.fn().mockReturnValue({ onConflictDoNothing });
+  const insert = vi.fn((table: unknown) =>
+    table === linkChecks
+      ? { values: linkCheckValues }
+      : { values: discoveryValues });
+  const tx = { select, update, insert };
+  const db = {
+    transaction: vi.fn(async (
+      operation: (transaction: typeof tx) => Promise<unknown>,
+    ) => operation(tx)),
+  } as unknown as Db;
+  return { db, discoveryValues, onConflictDoNothing };
+}
+
+function validationWithPlatformLinks(platformLinks: string[]): ValidatorResponse {
+  return {
+    ...repositoryValidationResult,
+    extraction: { ...repositoryValidationResult.extraction, platformLinks },
+  };
+}
 
 function expectSqlCondition(
   condition: unknown,

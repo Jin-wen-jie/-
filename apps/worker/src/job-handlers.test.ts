@@ -39,9 +39,11 @@ function createRepository(): WorkerRepository {
       productUrl: "https://shop.example/item/1",
       claimedAt: candidateClaimedAt,
     }),
-    saveCandidateValidation: vi.fn().mockResolvedValue(true),
+    saveCandidateValidation: vi.fn().mockResolvedValue({
+      saved: true,
+      discoveredIds: [],
+    }),
     saveCandidateFailure: vi.fn().mockResolvedValue(true),
-    saveDiscoveredPlatformLinks: vi.fn().mockResolvedValue([]),
     listListingIdsForRevalidation: vi.fn().mockResolvedValue([]),
     getListingForRevalidation: vi.fn().mockResolvedValue(null),
     saveListingRevalidation: vi.fn().mockResolvedValue(undefined),
@@ -232,9 +234,11 @@ describe("worker job handlers", () => {
     const savedLeases: Date[] = [];
     vi.mocked(repository.saveCandidateValidation).mockImplementation(
       async (_id, _result, claimedAt) => {
-        if (claimedAt?.getTime() !== currentLease.getTime()) return false;
+        if (claimedAt.getTime() !== currentLease.getTime()) {
+          return { saved: false, discoveredIds: [] };
+        }
         savedLeases.push(claimedAt);
-        return true;
+        return { saved: true, discoveredIds: [] };
       },
     );
     const oldHandlers = createJobHandlers({
@@ -291,12 +295,13 @@ describe("worker job handlers", () => {
     );
   });
 
-  it("propagates candidate discovery and enqueue failures as fatal", async () => {
+  it("propagates atomic candidate discovery and enqueue failures as fatal", async () => {
     const discoveryFailure = new Error("candidate discovery write failed");
     const repository = createRepository();
-    vi.mocked(repository.saveDiscoveredPlatformLinks).mockRejectedValue(
+    vi.mocked(repository.saveCandidateValidation).mockRejectedValue(
       discoveryFailure,
     );
+    const enqueue = vi.fn();
     const handlers = createJobHandlers({
       repository,
       validate: vi.fn().mockResolvedValue({
@@ -306,17 +311,19 @@ describe("worker job handlers", () => {
           platformLinks: ["https://shop.example/item/new"],
         },
       }),
-      enqueue: vi.fn(),
+      enqueue,
     });
 
     await expect(
       handlers.validateCandidate({ candidateId: "candidate-1" }),
     ).rejects.toBe(discoveryFailure);
     expect(repository.saveCandidateFailure).not.toHaveBeenCalled();
+    expect(enqueue).not.toHaveBeenCalled();
 
-    vi.mocked(repository.saveDiscoveredPlatformLinks).mockResolvedValue([
-      "candidate-new",
-    ]);
+    vi.mocked(repository.saveCandidateValidation).mockResolvedValue({
+      saved: true,
+      discoveredIds: ["candidate-new"],
+    });
     const enqueueFailure = new Error("in-memory enqueue failed");
     const enqueueHandlers = createJobHandlers({
       repository,
@@ -334,6 +341,65 @@ describe("worker job handlers", () => {
       enqueueHandlers.validateCandidate({ candidateId: "candidate-1" }),
     ).rejects.toBe(enqueueFailure);
     expect(repository.saveCandidateFailure).not.toHaveBeenCalled();
+  });
+
+  it("enqueues only ids returned by the atomic candidate save", async () => {
+    const repository = createRepository();
+    vi.mocked(repository.saveCandidateValidation).mockResolvedValue({
+      saved: true,
+      discoveredIds: ["candidate-new-1", "candidate-new-2"],
+    });
+    const enqueue = vi.fn().mockResolvedValue(undefined);
+    const handlers = createJobHandlers({
+      repository,
+      validate: vi.fn().mockResolvedValue({
+        ...validationResult,
+        extraction: {
+          ...validationResult.extraction,
+          platformLinks: ["https://pay.ldxp.cn/item/source"],
+        },
+      }),
+      enqueue,
+    });
+
+    await expect(
+      handlers.validateCandidate({ candidateId: "candidate-1" }),
+    ).resolves.toEqual({ status: "validated" });
+    expect(enqueue).toHaveBeenNthCalledWith(
+      1,
+      QUEUES.VALIDATE_CANDIDATE,
+      "candidate-new-1",
+    );
+    expect(enqueue).toHaveBeenNthCalledWith(
+      2,
+      QUEUES.VALIDATE_CANDIDATE,
+      "candidate-new-2",
+    );
+  });
+
+  it("does not discover or enqueue after losing the candidate lease", async () => {
+    const repository = createRepository();
+    vi.mocked(repository.saveCandidateValidation).mockResolvedValue({
+      saved: false,
+      discoveredIds: [],
+    });
+    const enqueue = vi.fn();
+    const handlers = createJobHandlers({
+      repository,
+      validate: vi.fn().mockResolvedValue({
+        ...validationResult,
+        extraction: {
+          ...validationResult.extraction,
+          platformLinks: ["https://pay.ldxp.cn/item/stale"],
+        },
+      }),
+      enqueue,
+    });
+
+    await expect(
+      handlers.validateCandidate({ candidateId: "candidate-1" }),
+    ).resolves.toEqual({ status: "missing" });
+    expect(enqueue).not.toHaveBeenCalled();
   });
 
   it("propagates candidate failure persistence errors as fatal", async () => {
@@ -455,39 +521,6 @@ describe("worker job handlers", () => {
     await expect(
       handlers.revalidateListing({ listingId: "listing-1" }),
     ).rejects.toBe(failure);
-  });
-
-  it("enqueues the exact candidate ids inserted from discovered links", async () => {
-    const repository = createRepository();
-    vi.mocked(repository.saveDiscoveredPlatformLinks).mockResolvedValue(
-      ["candidate-new-1", "candidate-new-2"],
-    );
-    const enqueue = vi.fn().mockResolvedValue(undefined);
-    const validate = vi.fn().mockResolvedValue({
-      ...validationResult,
-      extraction: {
-        ...validationResult.extraction,
-        platformLinks: [
-          "https://shop.example/item/new-1",
-          "https://shop.example/item/new-2",
-        ],
-      },
-    });
-    const handlers = createJobHandlers({ repository, validate, enqueue });
-
-    await handlers.validateCandidate({ candidateId: "candidate-1" });
-
-    expect(enqueue).toHaveBeenNthCalledWith(
-      1,
-      QUEUES.VALIDATE_CANDIDATE,
-      "candidate-new-1",
-    );
-    expect(enqueue).toHaveBeenNthCalledWith(
-      2,
-      QUEUES.VALIDATE_CANDIDATE,
-      "candidate-new-2",
-    );
-    expect(repository.listCandidateIdsForValidation).not.toHaveBeenCalled();
   });
 
   it("sweeps pending candidates into singleton entity jobs", async () => {

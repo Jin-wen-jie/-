@@ -12,6 +12,7 @@ import {
   lt,
   or,
   type Db,
+  type Transaction,
 } from "@compare/db";
 import type { WorkerRepository } from "./job-handlers.js";
 import {
@@ -135,7 +136,7 @@ export function createWorkerRepositoryFromDb(
           .from(discoveryCandidates)
           .where(ownership)
           .limit(1);
-        if (!candidate) return false;
+        if (!candidate) return { saved: false, discoveredIds: [] };
 
         const [updated] = await tx
           .update(discoveryCandidates)
@@ -151,7 +152,7 @@ export function createWorkerRepositoryFromDb(
           })
           .where(ownership)
           .returning({ id: discoveryCandidates.id });
-        if (!updated) return false;
+        if (!updated) return { saved: false, discoveredIds: [] };
         await tx.insert(linkChecks).values({
           id: randomUUID(),
           candidateId: id,
@@ -163,7 +164,12 @@ export function createWorkerRepositoryFromDb(
           elapsedMs: result.elapsedMs,
           checkedAt: observedAt,
         });
-        return true;
+        const discoveredIds = await insertDiscoveredPlatformLinks(
+          tx,
+          result.extraction.platformLinks,
+          observedAt,
+        );
+        return { saved: true, discoveredIds };
       });
     },
 
@@ -214,41 +220,6 @@ export function createWorkerRepositoryFromDb(
         .where(eq(listings.id, id))
         .limit(1);
       return listing ?? null;
-    },
-
-    async saveDiscoveredPlatformLinks(links) {
-      const insertedIds: string[] = [];
-      const seen = new Set<string>();
-      const now = new Date();
-      for (const url of links.slice(0, MAX_DISCOVERED_PLATFORM_LINKS)) {
-        if (url.length > MAX_DISCOVERED_URL_LENGTH) continue;
-        const canonicalUrl = canonicalizeUrl(url);
-        if (
-          canonicalUrl.length > MAX_DISCOVERED_URL_LENGTH ||
-          seen.has(canonicalUrl)
-        ) {
-          continue;
-        }
-        seen.add(canonicalUrl);
-        const urlFingerprint = fingerprintUrl(canonicalUrl);
-        const id = randomUUID();
-        const [inserted] = await db
-          .insert(discoveryCandidates)
-          .values({
-            id,
-            productUrl: canonicalUrl,
-            canonicalUrl,
-            urlFingerprint,
-            sourceType: "manual",
-            status: "DISCOVERED",
-            createdAt: now,
-            updatedAt: now,
-          })
-          .onConflictDoNothing({ target: discoveryCandidates.urlFingerprint })
-          .returning({ id: discoveryCandidates.id });
-        if (inserted) insertedIds.push(inserted.id);
-      }
-      return insertedIds;
     },
 
     async saveListingRevalidation(id, result) {
@@ -320,6 +291,44 @@ export function createWorkerRepositoryFromDb(
       });
     },
   };
+}
+
+async function insertDiscoveredPlatformLinks(
+  tx: Transaction,
+  links: string[],
+  now: Date,
+): Promise<string[]> {
+  const insertedIds: string[] = [];
+  const seen = new Set<string>();
+  for (const url of links.slice(0, MAX_DISCOVERED_PLATFORM_LINKS)) {
+    if (url.length > MAX_DISCOVERED_URL_LENGTH) continue;
+    const canonicalUrl = canonicalizeUrl(url);
+    if (
+      canonicalUrl.length > MAX_DISCOVERED_URL_LENGTH ||
+      seen.has(canonicalUrl)
+    ) {
+      continue;
+    }
+    seen.add(canonicalUrl);
+    const urlFingerprint = fingerprintUrl(canonicalUrl);
+    const id = randomUUID();
+    const [inserted] = await tx
+      .insert(discoveryCandidates)
+      .values({
+        id,
+        productUrl: canonicalUrl,
+        canonicalUrl,
+        urlFingerprint,
+        sourceType: "manual",
+        status: "DISCOVERED",
+        createdAt: now,
+        updatedAt: now,
+      })
+      .onConflictDoNothing({ target: discoveryCandidates.urlFingerprint })
+      .returning({ id: discoveryCandidates.id });
+    if (inserted) insertedIds.push(inserted.id);
+  }
+  return insertedIds;
 }
 
 function candidateLeaseOwnership(id: string, claimedAt: Date) {

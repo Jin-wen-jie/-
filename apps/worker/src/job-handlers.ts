@@ -27,6 +27,11 @@ export interface ListingValidationResult {
   failure: unknown;
 }
 
+export interface CandidateValidationSaveResult {
+  saved: boolean;
+  discoveredIds: string[];
+}
+
 export interface WorkerRepository {
   listCandidateIdsForValidation: (limit?: number) => Promise<string[]>;
   claimCandidateForValidation: (
@@ -36,13 +41,12 @@ export interface WorkerRepository {
     id: string,
     result: ValidatorResponse,
     claimedAt: Date,
-  ) => Promise<boolean>;
+  ) => Promise<CandidateValidationSaveResult>;
   saveCandidateFailure: (
     id: string,
     error: unknown,
     claimedAt: Date,
   ) => Promise<boolean>;
-  saveDiscoveredPlatformLinks: (links: string[]) => Promise<string[]>;
   listListingIdsForRevalidation: (limit?: number) => Promise<string[]>;
   getListingForRevalidation: (
     id: string,
@@ -102,20 +106,13 @@ export function createJobHandlers(dependencies: JobHandlerDependencies) {
         result,
         candidate.claimedAt,
       );
-      if (saved === false) return { status: "missing" as const };
-      // Discover other shops on the same platform
-      const discovered = result.extraction.platformLinks ?? [];
-      if (discovered.length > 0) {
-        const ids = await dependencies.repository.saveDiscoveredPlatformLinks(
-          discovered,
+      if (!saved.saved) return { status: "missing" as const };
+      if (saved.discoveredIds.length > 0) {
+        await Promise.all(
+          saved.discoveredIds.map((id) =>
+            dependencies.enqueue(QUEUES.VALIDATE_CANDIDATE, id),
+          ),
         );
-        if (ids.length > 0) {
-          await Promise.all(
-            ids.map((id) =>
-              dependencies.enqueue(QUEUES.VALIDATE_CANDIDATE, id),
-            ),
-          );
-        }
       }
       return { status: "validated" as const };
     },

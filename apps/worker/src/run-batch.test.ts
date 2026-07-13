@@ -53,9 +53,11 @@ function createRepository(
       productUrl: "https://shop.example/item/1",
       claimedAt: new Date("2026-07-13T00:00:00.000Z"),
     }),
-    saveCandidateValidation: async () => true,
+    saveCandidateValidation: async () => ({
+      saved: true,
+      discoveredIds: [],
+    }),
     saveCandidateFailure: async () => true,
-    saveDiscoveredPlatformLinks: async () => [],
     listListingIdsForRevalidation: async () => [],
     getListingForRevalidation: async () => null,
     saveListingRevalidation: async () => undefined,
