@@ -1,6 +1,13 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { buildComparisonKey, type ComparisonKeyInput } from "@compare/domain";
 import { productSpecs } from "@compare/db";
+
+const routeSource = readFileSync(
+  fileURLToPath(new URL("./route.ts", import.meta.url)),
+  "utf8",
+);
 
 const mocks = vi.hoisted(() => ({
   assertAdminMutation: vi.fn(),
@@ -65,6 +72,13 @@ describe("specs API", () => {
     vi.clearAllMocks();
     mocks.assertAdminMutation.mockResolvedValue({ ok: true });
     mocks.authorizeAdminRequest.mockResolvedValue({ ok: true });
+  });
+
+  it("imports the comparison-key authority directly from the domain package", () => {
+    expect(routeSource).toContain(
+      'import { buildComparisonKey } from "@compare/domain";',
+    );
+    expect(routeSource).toContain('import { productSpecs } from "@compare/db";');
   });
 
   it("includes quota in the GET projection", async () => {
