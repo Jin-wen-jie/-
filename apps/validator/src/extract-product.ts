@@ -210,6 +210,15 @@ function extractPlatformLinks(
 ): string[] {
   const seen = new Set<string>();
   const links: string[] = [];
+  let canonicalPageUrl: string | null = null;
+
+  try {
+    const currentPageUrl = new URL(pageUrl);
+    currentPageUrl.hash = "";
+    canonicalPageUrl = currentPageUrl.toString();
+  } catch {
+    // Candidate parsing below remains responsible for invalid page URLs.
+  }
 
   $("a[href]").each((_, el) => {
     const href = $(el).attr("href");
@@ -227,7 +236,7 @@ function extractPlatformLinks(
       const canonical = resolved.toString();
 
       // 跳过当前页面自身
-      if (canonical === new URL(pageUrl).href) return;
+      if (canonical === canonicalPageUrl) return;
 
       if (!seen.has(canonical)) {
         seen.add(canonical);

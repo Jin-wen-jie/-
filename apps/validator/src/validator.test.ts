@@ -151,4 +151,13 @@ describe("validator", () => {
       ],
     });
   });
+
+  it("does not discover the current page through another fragment", () => {
+    expect(
+      extractProduct(
+        '<a href="#other">Current item</a>',
+        "https://pay.ldxp.cn/item/a#current",
+      ),
+    ).toMatchObject({ platformLinks: [] });
+  });
 });
