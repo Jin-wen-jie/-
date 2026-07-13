@@ -12,6 +12,10 @@ const vercelConfig = JSON.parse(
   readFileSync("apps/web/vercel.json", "utf8"),
 ) as VercelConfig;
 const readme = readFileSync("README.md", "utf8");
+const deploymentDesign = readFileSync(
+  "docs/superpowers/specs/2026-07-13-vercel-github-actions-deployment-design.md",
+  "utf8",
+);
 
 function sectionBetween(
   markdown: string,
@@ -154,8 +158,12 @@ describe("free public deployment documentation", () => {
 
   it("documents collection bounds, manual runs, and first deployment order", () => {
     expect(deployment).toContain("`0 * * * *`");
-    expect(deployment).toContain("最长 30 分钟");
-    expect(deployment).toContain("Worker 最长运行 25 分钟");
+    expect(deployment).toContain("collect job 的最终硬上限为 30 分钟");
+    expect(deployment).toContain("`WORKER_DEADLINE_MS=1500000`");
+    expect(deployment).toContain("25 分钟软截止");
+    expect(deployment).toContain("停止领取或启动新实体");
+    expect(deployment).toContain("已启动实体允许有界收尾");
+    expect(deployment).not.toContain("Worker 最长运行 25 分钟");
     expect(deployment).toContain("50 个候选项 + 50 个货源链接");
     expect(deployment).toContain("并发数 4");
     expect(deployment).toContain("GitHub 计划任务可能延迟");
@@ -167,6 +175,21 @@ describe("free public deployment documentation", () => {
       "先配置 GitHub Secrets 并手动运行成功，再导入并部署 Vercel",
     );
     expect(deployment).toContain("首次登录后立即修改初始密码");
+  });
+
+  it("documents the soft worker deadline and final Actions hard limit", () => {
+    expect(deploymentDesign).toContain(
+      "`WORKER_DEADLINE_MS=1500000` 是 25 分钟软截止",
+    );
+    expect(deploymentDesign).toContain("停止领取或启动新实体");
+    expect(deploymentDesign).toContain("已启动实体允许有界收尾");
+    expect(deploymentDesign).toContain(
+      "单 URL 与数据库操作由代码层的独立有界超时约束",
+    );
+    expect(deploymentDesign).toContain(
+      "collect job 的 30 分钟超时是最终硬上限",
+    );
+    expect(deploymentDesign).not.toContain("默认硬超时为 `25` 分钟");
   });
 
   it("states the free-tier limits without recommending obsolete hosts", () => {

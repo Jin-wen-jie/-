@@ -193,7 +193,7 @@ Preview 默认不连接生产数据库，并绝不复用 Production Secret。若
 #### 采集计划与手动触发
 
 - workflow cron 为 `0 * * * *`。GitHub 计划任务可能延迟，不保证整点启动。
-- collect job 最长 30 分钟；Worker 最长运行 25 分钟，每次最多处理 50 个候选项 + 50 个货源链接，并发数 4。
+- collect job 的最终硬上限为 30 分钟；`WORKER_DEADLINE_MS=1500000` 是 25 分钟软截止，到点后 Worker 停止领取或启动新实体，已启动实体允许有界收尾。每次最多处理 50 个候选项 + 50 个货源链接，并发数 4。
 - 需要立即采集或验证配置时，使用路径 `Actions -> Hourly collection -> Run workflow` 手动触发。
 
 ### 5. 首次部署顺序

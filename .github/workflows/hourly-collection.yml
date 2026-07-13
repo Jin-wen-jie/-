@@ -64,6 +64,27 @@ jobs:
           validator_pid=""
           worker_pid=""
 
+          publish_worker_summary() {
+            local empty_message="Worker produced no collection output."
+
+            if [[ -s "${RUNNER_TEMP}/worker.log" ]]; then
+              cat "${RUNNER_TEMP}/worker.log"
+            else
+              printf '%s\n' "${empty_message}"
+            fi
+
+            {
+              printf '## Hourly collection\n\n'
+              printf '```text\n'
+              if [[ -s "${RUNNER_TEMP}/worker.log" ]]; then
+                cat "${RUNNER_TEMP}/worker.log"
+              else
+                printf '%s\n' "${empty_message}"
+              fi
+              printf '\n```\n'
+            } >>"${GITHUB_STEP_SUMMARY}"
+          }
+
           cleanup() {
             if [[ -n "${worker_pid}" ]]; then
               kill "${worker_pid}" 2>/dev/null || true
@@ -121,6 +142,8 @@ jobs:
                 worker_status=$?
               fi
               worker_pid=""
+
+              publish_worker_summary || true
 
               if (( worker_status != 0 )); then
                 exit "${worker_status}"

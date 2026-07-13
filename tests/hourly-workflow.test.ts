@@ -205,4 +205,57 @@ describe("hourly collection workflow", () => {
     expect(collection).not.toContain("DATABASE_URL");
     expect(collection).not.toContain("VALIDATOR_SHARED_TOKEN");
   });
+
+  it("publishes the fixed worker log to the Actions log and job summary", () => {
+    const collection = stepNamed("Run bounded collection").run ?? "";
+    const publisherStart = collection.indexOf("publish_worker_summary()");
+    const cleanupStart = collection.indexOf("cleanup()", publisherStart);
+
+    expect(publisherStart).toBeGreaterThan(-1);
+    expect(cleanupStart).toBeGreaterThan(publisherStart);
+
+    const publisher = collection.slice(publisherStart, cleanupStart);
+    expect(publisher).toContain(
+      'if [[ -s "${RUNNER_TEMP}/worker.log" ]]; then',
+    );
+    expect(
+      publisher.match(/cat "\$\{RUNNER_TEMP\}\/worker\.log"/g),
+    ).toHaveLength(2);
+    expect(publisher.match(/\bcat\s+/g)).toHaveLength(2);
+    expect(publisher).toContain("Worker produced no collection output.");
+    expect(publisher).toContain("## Hourly collection");
+    expect(publisher).toContain("```text");
+    expect(publisher).toContain('${GITHUB_STEP_SUMMARY}');
+
+    expect(collection).not.toMatch(
+      /(?:cat|<)\s*"?\$\{RUNNER_TEMP\}\/validator\.log/i,
+    );
+  });
+
+  it("publishes the summary after wait without replacing the worker status", () => {
+    const collection = stepNamed("Run bounded collection").run ?? "";
+    const workerStartIndex = collection.indexOf(
+      "pnpm --filter @compare/worker run-once",
+    );
+    const runtimeMonitor = collection.slice(workerStartIndex);
+    const workerCheckIndex = runtimeMonitor.indexOf(
+      'if ! kill -0 "${worker_pid}" 2>/dev/null; then',
+    );
+    const statusHandling = runtimeMonitor.slice(workerCheckIndex);
+
+    const waitIndex = statusHandling.indexOf('if wait "${worker_pid}"; then');
+    const publishIndex = statusHandling.indexOf(
+      "publish_worker_summary || true",
+    );
+    const failureIndex = statusHandling.indexOf(
+      "if (( worker_status != 0 )); then",
+    );
+
+    expect(waitIndex).toBeGreaterThan(-1);
+    expect(publishIndex).toBeGreaterThan(waitIndex);
+    expect(failureIndex).toBeGreaterThan(publishIndex);
+    expect(statusHandling.slice(failureIndex)).toContain(
+      'exit "${worker_status}"',
+    );
+  });
 });
