@@ -9,7 +9,8 @@
     ".": {
       "types": "./src/client.ts",
       "development": "./src/client.ts",
-      "import": "./dist/client.js"
+      "import": "./dist/client.js",
+      "default": "./dist/client.js"
     }
   },
   "scripts": {
