@@ -2,9 +2,13 @@ import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 import * as schema from "./schema.js";
 
-export function createDb(databaseUrl: string) {
+type CreateDbOptions = {
+  maxConnections?: number;
+};
+
+export function createDb(databaseUrl: string, options: CreateDbOptions = {}) {
   const client = postgres(databaseUrl, {
-    max: 10,
+    max: options.maxConnections ?? 10,
     connect_timeout: 10,
     prepare: true,
     connection: {

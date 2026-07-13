@@ -38,4 +38,13 @@ describe("database client", () => {
     );
     expect(database).toEqual({ kind: "db" });
   });
+
+  it("allows serverless callers to limit the pool to one connection", () => {
+    createDb("postgres://session-pooler/compare", { maxConnections: 1 });
+
+    expect(postgres).toHaveBeenCalledWith(
+      "postgres://session-pooler/compare",
+      expect.objectContaining({ max: 1 }),
+    );
+  });
 });
