@@ -43,7 +43,7 @@ describe("workspace", () => {
 
   it("keeps service development scripts scoped to their own environment", () => {
     const expectedDevScripts = new Map([
-      ["apps/worker/package.json", "tsx watch src/index.ts"],
+      ["apps/worker/package.json", "tsx watch --conditions=development src/index.ts"],
       ["apps/validator/package.json", "tsx watch src/server.ts"],
     ]);
 

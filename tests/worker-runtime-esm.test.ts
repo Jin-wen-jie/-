@@ -17,6 +17,56 @@ function commandOutput(result: SpawnSyncReturns<string>): string {
 }
 
 describe("worker production ESM", () => {
+  it("resolves workspace packages from source in tsx development scripts", () => {
+    const workerManifest = JSON.parse(
+      readFileSync(new URL("../apps/worker/package.json", import.meta.url), "utf8"),
+    ) as { scripts?: { dev?: string } };
+    const dbManifest = JSON.parse(
+      readFileSync(new URL("../packages/db/package.json", import.meta.url), "utf8"),
+    ) as { scripts?: { "db:seed"?: string } };
+    const expectedWorkerDev =
+      "tsx watch --conditions=development src/index.ts";
+    const expectedDbSeed =
+      "tsx --conditions=development src/seed-run.ts";
+    const scriptsEnableDevelopment =
+      workerManifest.scripts?.dev === expectedWorkerDev &&
+      dbManifest.scripts?.["db:seed"] === expectedDbSeed;
+
+    const resolution = spawnSync(
+      process.execPath,
+      [
+        "--import",
+        "tsx",
+        ...(scriptsEnableDevelopment ? ["--conditions=development"] : []),
+        "--input-type=module",
+        "--eval",
+        "console.log(JSON.stringify({ db: import.meta.resolve('@compare/db'), domain: import.meta.resolve('@compare/domain') }))",
+      ],
+      {
+        cwd: fileURLToPath(new URL("../apps/worker/", import.meta.url)),
+        encoding: "utf8",
+        timeout: 30_000,
+      },
+    );
+
+    const output = commandOutput(resolution);
+    expect(resolution.error, output).toBeUndefined();
+    expect(resolution.status, output).toBe(0);
+    const resolved = JSON.parse(resolution.stdout.trim()) as {
+      db: string;
+      domain: string;
+    };
+
+    expect(fileURLToPath(resolved.db), output).toBe(
+      fileURLToPath(new URL("../packages/db/src/client.ts", import.meta.url)),
+    );
+    expect(fileURLToPath(resolved.domain), output).toBe(
+      fileURLToPath(new URL("../packages/domain/src/index.ts", import.meta.url)),
+    );
+    expect(workerManifest.scripts?.dev).toBe(expectedWorkerDev);
+    expect(dbManifest.scripts?.["db:seed"]).toBe(expectedDbSeed);
+  });
+
   it("routes package fallback conditions to built JavaScript", () => {
     const packageExports = [
       ["packages/domain/package.json", "./dist/index.js"],

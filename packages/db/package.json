@@ -20,7 +20,7 @@
     "test": "vitest run",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
-    "db:seed": "tsx src/seed-run.ts"
+    "db:seed": "tsx --conditions=development src/seed-run.ts"
   },
   "dependencies": {
     "@compare/domain": "workspace:*",
