@@ -2,7 +2,10 @@
 /* eslint-disable no-console */
 import { createDb } from "./client.js";
 import { seedWatchSources } from "./seed-watch-sources.js";
-import { seedCandidates } from "./seed-candidates.js";
+import {
+  pruneRetiredSeedCandidates,
+  seedCandidates,
+} from "./seed-candidates.js";
 import { seedSpecs } from "./seed-specs.js";
 
 const databaseUrl = process.env.DATABASE_URL;
@@ -17,8 +20,11 @@ try {
   await seedWatchSources(db);
   console.log("✓ Watch sources seeded");
 
-	await seedCandidates(db);
-	console.log("✓ Initial candidates seeded");
+  await pruneRetiredSeedCandidates(db);
+  console.log("✓ Retired seed candidates pruned");
+
+  await seedCandidates(db);
+  console.log("✓ Initial candidates seeded");
 
 	await seedSpecs(db);
 	console.log("✓ Product specs seeded");
