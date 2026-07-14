@@ -16,7 +16,7 @@ describe("database client", () => {
     vi.clearAllMocks();
   });
 
-  it("sets bounded connection and PostgreSQL session timeouts", () => {
+  it("sets bounded connection and pooler-compatible session options", () => {
     const database = createDb("postgres://session-pooler/compare");
 
     expect(postgres).toHaveBeenCalledWith(
@@ -24,7 +24,7 @@ describe("database client", () => {
       {
         max: 10,
         connect_timeout: 10,
-        prepare: true,
+        prepare: false,
         connection: {
           statement_timeout: 30_000,
           lock_timeout: 5_000,

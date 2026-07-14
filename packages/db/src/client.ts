@@ -14,7 +14,7 @@ export function createDb(databaseUrl: string, options: CreateDbOptions = {}) {
       ? {}
       : { idle_timeout: options.idleTimeoutSeconds }),
     connect_timeout: 10,
-    prepare: true,
+    prepare: false,
     connection: {
       statement_timeout: 30_000,
       lock_timeout: 5_000,

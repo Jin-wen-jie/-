@@ -8,7 +8,11 @@ export function getDatabase(): Db {
   if (!databaseUrl) throw new Error("DATABASE_URL is required");
   database = createDb(databaseUrl, {
     maxConnections: 1,
-    idleTimeoutSeconds: 20,
+    ...(usesSupabasePooler(databaseUrl) ? {} : { idleTimeoutSeconds: 20 }),
   });
   return database;
+}
+
+function usesSupabasePooler(databaseUrl: string): boolean {
+  return new URL(databaseUrl).hostname.endsWith(".pooler.supabase.com");
 }

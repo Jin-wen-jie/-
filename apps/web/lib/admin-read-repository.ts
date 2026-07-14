@@ -62,15 +62,15 @@ export async function listRankingViews(): Promise<RankingView[]> {
 
 export async function getDashboardCounts() {
   const db = getDatabase();
-  const [candidateRows, merchantRows, listingRows] = await Promise.all([
-    db.select({ id: discoveryCandidates.id }).from(discoveryCandidates),
-    db.select({ id: merchants.id }).from(merchants),
-    db.select({ id: listings.id }).from(listings),
+  const [candidates, merchantCount, listingCount] = await Promise.all([
+    db.$count(discoveryCandidates),
+    db.$count(merchants),
+    db.$count(listings),
   ]);
   return {
-    candidates: candidateRows.length,
-    merchants: merchantRows.length,
-    listings: listingRows.length,
+    candidates,
+    merchants: merchantCount,
+    listings: listingCount,
   };
 }
 

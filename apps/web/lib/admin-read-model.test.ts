@@ -1,7 +1,21 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const mocks = vi.hoisted(() => ({
+  getDatabase: vi.fn(),
+}));
+
+vi.mock("./database", () => ({
+  getDatabase: mocks.getDatabase,
+}));
+
 import { toRankingView } from "./admin-read-model.js";
+import { getDashboardCounts } from "./admin-read-repository.js";
 
 describe("admin read model", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
   it("maps only persisted listing facts into a ranking row", () => {
     expect(
       toRankingView({
@@ -40,5 +54,21 @@ describe("admin read model", () => {
       sourceUrl: "https://x.com/example/status/1",
       merchantUrl: "https://shop.example/",
     });
+  });
+
+  it("counts dashboard records in PostgreSQL without loading every row", async () => {
+    const count = vi
+      .fn()
+      .mockResolvedValueOnce(80)
+      .mockResolvedValueOnce(12)
+      .mockResolvedValueOnce(34);
+    mocks.getDatabase.mockReturnValue({ $count: count });
+
+    await expect(getDashboardCounts()).resolves.toEqual({
+      candidates: 80,
+      merchants: 12,
+      listings: 34,
+    });
+    expect(count).toHaveBeenCalledTimes(3);
   });
 });
