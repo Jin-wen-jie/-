@@ -88,7 +88,7 @@ describe("admin read model", () => {
       supplyEvidence: "IN_STOCK · 库存 12",
       productUrl: "https://shop.example/item/1",
       sourceUrl: "https://source.example/post/1",
-      merchantUrl: "https://shop.example/",
+      merchantUrl: null,
       lastVerified: "2026-07-14T19:25:00.000Z",
     });
   });

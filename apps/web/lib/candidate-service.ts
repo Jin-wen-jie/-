@@ -38,7 +38,7 @@ export interface CandidateView {
   price: string | null;
   merchantName: string | null;
   sourceUrl: string | null;
-  merchantUrl: string;
+  merchantUrl: string | null;
   focus: string | null;
   availability: string | null;
   evidenceNote: string | null;
@@ -71,8 +71,6 @@ export function canNormalizeCandidateStatus(status: string): boolean {
 export function toCandidateView(input: CandidateViewInput): CandidateView {
   const extraction = extractionSchema.safeParse(input.extractionResult);
   const data = extraction.success ? extraction.data : {};
-  const merchantUrl =
-    data.merchantUrl ?? new URL(input.productUrl).origin + "/";
 
   return {
     id: input.id,
@@ -83,7 +81,7 @@ export function toCandidateView(input: CandidateViewInput): CandidateView {
     price: data.price === undefined ? null : String(data.price),
     merchantName: data.merchantName ?? null,
     sourceUrl: data.sourceUrl ?? input.eventSourceUrl,
-    merchantUrl,
+    merchantUrl: data.merchantUrl ?? null,
     focus: data.focus ?? null,
     availability: data.availability ?? null,
     evidenceNote: data.note ?? null,

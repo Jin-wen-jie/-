@@ -31,7 +31,7 @@ describe("candidate service", () => {
     ).toMatchObject({
       title: "GPT-K12子号(家宽ip注册,稳定性尚可)",
       merchantName: "花生店铺",
-      merchantUrl: "https://store.codesky.qzz.io/",
+      merchantUrl: null,
       focus: "K12",
       availability: "OUT_OF_STOCK",
       sold: 173,
@@ -39,6 +39,22 @@ describe("candidate service", () => {
       price: null,
       createdAt: createdAt.toISOString(),
     });
+  });
+
+  it("uses only an explicitly verified merchant URL", () => {
+    const view = toCandidateView({
+      id: "candidate-1",
+      productUrl: "https://pay.ldxp.cn/item/item1",
+      sourceType: "manual",
+      status: "REVIEW_REQUIRED",
+      extractionResult: {
+        merchantUrl: "https://pay.ldxp.cn/shop/SHOP1",
+      },
+      eventSourceUrl: null,
+      createdAt: new Date("2026-07-11T13:58:03.000Z"),
+    });
+
+    expect(view.merchantUrl).toBe("https://pay.ldxp.cn/shop/SHOP1");
   });
 
   it("does not infer Bug Team from an ordinary Team listing", () => {

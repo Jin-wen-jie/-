@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ChevronLeft, ChevronRight, LoaderCircle } from "lucide-react";
 import { DataTable } from "../../../components/data-table";
 import { ExternalLink } from "../../../components/external-link";
@@ -10,7 +10,7 @@ import type { Column } from "../../../components/data-table";
 interface Candidate {
   id: string; productUrl: string; sourceType: "manual" | "x" | "telegram";
   status: string; title: string | null; price: string | null;
-  merchantName: string | null; sourceUrl: string | null; merchantUrl: string;
+  merchantName: string | null; sourceUrl: string | null; merchantUrl: string | null;
   focus: string | null; availability: string | null; evidenceNote: string | null;
   observedAt: string | null; sold: number | null; inventory: number | null;
   createdAt: string;
@@ -52,6 +52,16 @@ export default function CandidatesClient({
   );
   const [error, setError] = useState("");
 
+  useEffect(() => {
+    let cancelled = false;
+    void enrichMerchantUrls(initialPage.items).then((items) => {
+      if (!cancelled) setCandidates(items);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [initialPage.items]);
+
   async function fetchCandidates(nextPage = page) {
     setLoading(true);
     try {
@@ -64,7 +74,7 @@ export default function CandidatesClient({
       if (!res.ok || !Array.isArray(data.items)) {
         throw new Error(data.error ?? "加载失败");
       }
-      setCandidates(data.items);
+      setCandidates(await enrichMerchantUrls(data.items));
       setPage(data.page ?? nextPage);
       setTotal(data.total ?? 0);
       setError("");
@@ -188,4 +198,59 @@ export default function CandidatesClient({
       </div>
     </div>
   );
+}
+
+async function enrichMerchantUrls(items: Candidate[]): Promise<Candidate[]> {
+  return Promise.all(
+    items.map(async (candidate) => {
+      if (candidate.merchantUrl) return candidate;
+      const goodsKey = ldxpGoodsKey(candidate.productUrl);
+      if (!goodsKey) return candidate;
+
+      try {
+        const response = await fetch(
+          "https://www.ldxp.cn/shopApi/Shop/goodsInfo",
+          {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ goods_key: goodsKey, trade_no: null }),
+            credentials: "omit",
+            signal: AbortSignal.timeout(10_000),
+          },
+        );
+        if (!response.ok) return candidate;
+        const payload = await response.json() as unknown;
+        const root = recordValue(payload);
+        const data = recordValue(root.data);
+        const user = recordValue(data.user);
+        const merchantUrl = verifiedLdxpMerchantUrl(user.link);
+        return root.code === 1 && data.goods_key === goodsKey && merchantUrl
+          ? { ...candidate, merchantUrl }
+          : candidate;
+      } catch {
+        return candidate;
+      }
+    }),
+  );
+}
+
+function ldxpGoodsKey(productUrl: string): string | null {
+  const url = new URL(productUrl);
+  const match = url.pathname.match(/^\/item\/([A-Za-z0-9]+)\/?$/);
+  return url.origin === "https://pay.ldxp.cn" ? match?.[1] ?? null : null;
+}
+
+function verifiedLdxpMerchantUrl(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const url = new URL(value);
+  return url.origin === "https://pay.ldxp.cn" &&
+      /^\/shop\/[A-Za-z0-9_-]+\/?$/.test(url.pathname)
+    ? url.toString()
+    : null;
+}
+
+function recordValue(value: unknown): Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
 }

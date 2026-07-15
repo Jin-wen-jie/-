@@ -49,8 +49,7 @@ export function toApprovedCandidateRankingView(
   const price = numericValue(extraction.price);
   const totalPrice = numericValue(extraction.totalPrice) ?? price;
   const merchantName = stringValue(extraction.merchantName) ?? "未识别商家";
-  const merchantUrl =
-    stringValue(extraction.merchantUrl) ?? new URL(input.productUrl).origin + "/";
+  const merchantUrl = stringValue(extraction.merchantUrl);
   const sourceUrl =
     stringValue(extraction.sourceUrl) ?? input.eventSourceUrl;
   const focus = stringValue(extraction.focus) ?? "未分类";
