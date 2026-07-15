@@ -494,8 +494,17 @@ describe("public search persistence", () => {
           url: "https://shop.example/item/k12",
           title: "K12 account",
           snippet: "公开商品",
-          engine: "bing-rss",
+          engine: "priceai",
           focus: "K12",
+          sourceUrl: "https://priceai.cc/products/chatgpt-team-business",
+          metadata: {
+            price: 0.88,
+            currency: "CNY",
+            inventory: 18,
+            merchantName: "公开商铺",
+            availability: "IN_STOCK",
+            observedAt: "2026-07-15T05:00:00.000Z",
+          },
         },
         {
           url: "https://shop.example/item/bug",
@@ -506,6 +515,12 @@ describe("public search persistence", () => {
         },
       ],
       engines: [
+        {
+          engine: "priceai",
+          status: "ACTIVE",
+          resultCount: 1,
+          errorCategory: null,
+        },
         {
           engine: "bing-rss",
           status: "ACTIVE",
@@ -522,7 +537,28 @@ describe("public search persistence", () => {
     })).resolves.toEqual({ inserted: 1, deduped: 1 });
 
     expect(candidateValues).toHaveBeenCalledTimes(2);
+    expect(candidateValues).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        productUrl: "https://shop.example/item/k12",
+        extractionResult: expect.objectContaining({
+          sourceEngine: "priceai",
+          sourceUrl: "https://priceai.cc/products/chatgpt-team-business",
+          price: 0.88,
+          inventory: 18,
+          merchantName: "公开商铺",
+          availability: "IN_STOCK",
+          observedAt: "2026-07-15T05:00:00.000Z",
+        }),
+      }),
+    );
     expect(eventValues).toHaveBeenCalledOnce();
+    expect(eventValues).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sourceUrl: "https://priceai.cc/products/chatgpt-team-business",
+        platform: "priceai",
+      }),
+    );
     expect(sourceValues).toHaveBeenCalledWith(
       expect.objectContaining({
         id: "src-web-public-search",

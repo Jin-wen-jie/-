@@ -412,6 +412,13 @@ export async function listSourceViews() {
   const rows = await withDatabaseRetry(() => db.select().from(watchSources));
   return rows.map((source) => {
     const result = isRecord(source.lastRunResult) ? source.lastRunResult : {};
+    const engines = Array.isArray(result.engines)
+      ? result.engines.filter(isRecord).map((engine) => ({
+        name: stringValue(engine.engine) ?? "unknown",
+        status: stringValue(engine.status) ?? "UNKNOWN",
+        count: numberValue(engine.resultCount) ?? 0,
+      }))
+      : [];
     return {
       id: source.id,
       platform: source.platform,
@@ -420,6 +427,9 @@ export async function listSourceViews() {
       lastRunAt: source.lastRunAt?.toISOString() ?? null,
       discovered: numberValue(result.discoveredCount) ?? 0,
       errorCategory: stringValue(result.errorCategory),
+      engineSummary: engines
+        .map((engine) => `${engine.name} ${engine.status} ${engine.count}`)
+        .join(" · "),
     };
   });
 }

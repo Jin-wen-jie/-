@@ -127,6 +127,9 @@ importers:
       '@compare/domain':
         specifier: workspace:*
         version: link:../../packages/domain
+      cheerio:
+        specifier: 1.1.2
+        version: 1.1.2
       fast-xml-parser:
         specifier: 5.3.6
         version: 5.3.6

@@ -5,6 +5,11 @@ import { validateUrl } from "../validator-client.js";
 import type { ValidatorResponse } from "../validator-client.js";
 import { XMLParser } from "fast-xml-parser";
 import { z } from "zod";
+import {
+  parsePriceAiPage,
+  PRICEAI_TEAM_BUSINESS_URL,
+  type PriceAiOffer,
+} from "../connectors/priceai.js";
 
 export interface JobContext {
   baseUrl: string;
@@ -79,7 +84,12 @@ export async function discoverSource(
   return { discovered: 0, deduped: 0, error: null };
 }
 
-export type PublicSearchEngine = "bing-rss" | "brave" | "google" | "serper";
+export type PublicSearchEngine =
+  | "priceai"
+  | "bing-rss"
+  | "brave"
+  | "google"
+  | "serper";
 export type PublicSearchEngineStatus =
   | "ACTIVE"
   | "AUTH_DISABLED"
@@ -100,6 +110,15 @@ export interface PublicSearchCandidate {
   snippet: string;
   engine: PublicSearchEngine;
   focus: "K12" | "Bug Team";
+  sourceUrl?: string;
+  metadata?: {
+    price?: number;
+    currency?: string;
+    inventory?: number;
+    merchantName?: string;
+    availability?: "IN_STOCK" | "OUT_OF_STOCK" | "UNKNOWN";
+    observedAt?: string;
+  };
 }
 
 export interface PublicSearchEngineResult {
@@ -118,10 +137,13 @@ interface SearchHit {
   url: string;
   title: string;
   snippet: string;
+  sourceUrl?: string;
+  metadata?: PublicSearchCandidate["metadata"];
 }
 
 interface SearchProvider {
   name: PublicSearchEngine;
+  queries?: readonly string[];
   search: (query: string) => Promise<SearchHit[]>;
 }
 
@@ -199,6 +221,11 @@ function createSearchProviders(
 ): SearchProvider[] {
   const providers: SearchProvider[] = [
     {
+      name: "priceai",
+      queries: [PRICEAI_TEAM_BUSINESS_URL],
+      search: () => searchPriceAi(request),
+    },
+    {
       name: "bing-rss",
       search: (query) => searchBingRss(query, request),
     },
@@ -231,7 +258,7 @@ async function runSearchProvider(provider: SearchProvider): Promise<{
 }> {
   const hits: SearchHit[] = [];
   const failures: string[] = [];
-  for (const query of DEFAULT_PUBLIC_SEARCH_QUERIES) {
+  for (const query of provider.queries ?? DEFAULT_PUBLIC_SEARCH_QUERIES) {
     try {
       hits.push(...await provider.search(query));
     } catch (error) {
@@ -260,6 +287,78 @@ async function runSearchProvider(provider: SearchProvider): Promise<{
     },
     hits: [],
   };
+}
+
+async function searchPriceAi(request: typeof fetch): Promise<SearchHit[]> {
+  const response = await searchRequest(
+    request,
+    new URL(PRICEAI_TEAM_BUSINESS_URL),
+    {
+      headers: {
+        accept: "text/html,application/xhtml+xml",
+        "user-agent": "PublicPriceResearch/1.0",
+      },
+    },
+  );
+  let offers: PriceAiOffer[];
+  try {
+    offers = parsePriceAiPage(await response.text()).offers;
+  } catch {
+    throw new SearchProviderError("INVALID_RESPONSE");
+  }
+  return offers.map((offer) => {
+    const focus = offer.filterTags.includes("team_bug")
+      ? "Bug Team"
+      : offer.filterTags.includes("team_k12")
+        ? "K12"
+        : "";
+    return {
+      url: offer.url,
+      title: offer.sourceTitle,
+      snippet: [
+        focus,
+        offer.sourceStoreName ?? offer.sourceName,
+        offer.price === null || offer.price === undefined
+          ? null
+          : `价格 ${offer.price} ${offer.currency ?? "CNY"}`,
+        offer.stockCount === null || offer.stockCount === undefined
+          ? null
+          : `库存 ${offer.stockCount}`,
+        ...offer.filterTags,
+      ].filter(Boolean).join(" · "),
+      sourceUrl: PRICEAI_TEAM_BUSINESS_URL,
+      metadata: {
+        ...(offer.price === null || offer.price === undefined
+          ? {}
+          : { price: offer.price }),
+        ...(offer.currency ? { currency: offer.currency } : {}),
+        ...(offer.stockCount === null || offer.stockCount === undefined
+          ? {}
+          : { inventory: offer.stockCount }),
+        ...(offer.sourceStoreName ?? offer.sourceName
+          ? { merchantName: offer.sourceStoreName ?? offer.sourceName! }
+          : {}),
+        availability: priceAiAvailability(offer),
+        ...(offer.verifiedAt ?? offer.capturedAt
+          ? { observedAt: offer.verifiedAt ?? offer.capturedAt! }
+          : {}),
+      },
+    };
+  });
+}
+
+function priceAiAvailability(
+  offer: PriceAiOffer,
+): "IN_STOCK" | "OUT_OF_STOCK" | "UNKNOWN" {
+  if (offer.stockCount === 0) return "OUT_OF_STOCK";
+  const status = `${offer.effectiveStatus ?? ""} ${offer.status ?? ""}`;
+  if (/out[_ -]?of[_ -]?stock|unavailable|sold[_ -]?out/i.test(status)) {
+    return "OUT_OF_STOCK";
+  }
+  if (/available|in[_ -]?stock|low[_ -]?stock/i.test(status)) {
+    return "IN_STOCK";
+  }
+  return "UNKNOWN";
 }
 
 async function searchBingRss(
@@ -417,6 +516,8 @@ function toPublicSearchCandidate(
     snippet: hit.snippet.slice(0, 1_000),
     engine,
     focus,
+    ...(hit.sourceUrl ? { sourceUrl: hit.sourceUrl } : {}),
+    ...(hit.metadata ? { metadata: hit.metadata } : {}),
   };
 }
 

@@ -348,11 +348,16 @@ export function createWorkerRepositoryFromDb(
                 pageTitle: candidate.title || undefined,
                 focus: candidate.focus,
                 sourceEngine: candidate.engine,
+                ...(candidate.sourceUrl
+                  ? { sourceUrl: candidate.sourceUrl }
+                  : {}),
+                ...candidate.metadata,
                 searchSnippet: candidate.snippet || undefined,
                 note:
-                  `Public web search result from ${candidate.engine}; ` +
-                  "awaiting page validation.",
-                observedAt: observedAt.toISOString(),
+                  `Public listing discovered through ${candidate.engine}; ` +
+                  "price and stock require direct page validation.",
+                observedAt: candidate.metadata?.observedAt ??
+                  observedAt.toISOString(),
               },
               createdAt: observedAt,
               updatedAt: observedAt,
@@ -362,7 +367,7 @@ export function createWorkerRepositoryFromDb(
           if (!saved) continue;
           await tx.insert(discoveryEvents).values({
             id: eventId,
-            sourceUrl: canonicalUrl,
+            sourceUrl: candidate.sourceUrl ?? canonicalUrl,
             platform: candidate.engine,
             summary: [candidate.title, candidate.snippet]
               .filter(Boolean)

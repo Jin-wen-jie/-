@@ -46,6 +46,15 @@ function deferred() {
   return { promise, resolve };
 }
 
+function priceAiPage(offers: unknown[] = []): string {
+  const payload = `2d:{"initialData":${JSON.stringify({
+    total: offers.length,
+    offers,
+    limited: false,
+  })}}`;
+  return `<script>self.__next_f.push(${JSON.stringify([1, payload])})</script>`;
+}
+
 describe("runOnce", () => {
   it("awaits repository close after a successful batch", async () => {
     const closing = deferred();
@@ -154,10 +163,15 @@ describe("public web discovery", () => {
         <item><title>Bug Team account</title><link>https://shop.example/products/bug-team</link><description>Bug Team 账号商品</description></item>
         <item><title>普通新闻</title><link>https://news.example/story</link><description>无关内容</description></item>
       </channel></rss>`;
-    const request = async () => new Response(rss, {
-      status: 200,
-      headers: { "content-type": "application/rss+xml" },
-    });
+    const request = async (input: Parameters<typeof fetch>[0]) => {
+      const url = new URL(String(input));
+      return url.hostname === "priceai.cc"
+        ? new Response(priceAiPage())
+        : new Response(rss, {
+          status: 200,
+          headers: { "content-type": "application/rss+xml" },
+        });
+    };
 
     const result = await discoverPublicWeb(
       { maxResults: 50 },
@@ -166,6 +180,12 @@ describe("public web discovery", () => {
 
     expect(DEFAULT_PUBLIC_SEARCH_QUERIES).toHaveLength(4);
     expect(result.engines).toEqual([
+      {
+        engine: "priceai",
+        status: "ACTIVE",
+        resultCount: 0,
+        errorCategory: null,
+      },
       {
         engine: "bing-rss",
         status: "ACTIVE",
@@ -187,9 +207,63 @@ describe("public web discovery", () => {
     ]);
   });
 
+  it("collects PriceAI leads with source metadata for direct validation", async () => {
+    const request = async (input: Parameters<typeof fetch>[0]) => {
+      const url = new URL(String(input));
+      if (url.hostname === "priceai.cc") {
+        return new Response(priceAiPage([{
+          url: "https://pay.ldxp.cn/item/new-k12",
+          sourceTitle: "K12 Team 成品",
+          sourceStoreName: "公开商铺",
+          price: 0.88,
+          currency: "CNY",
+          status: "in_stock",
+          stockCount: 18,
+          filterTags: ["team_k12", "proxy_supported"],
+          verifiedAt: "2026-07-15T09:00:00.000Z",
+          hidden: false,
+        }]));
+      }
+      return new Response(
+        "<rss><channel><title>empty</title></channel></rss>",
+        { status: 200 },
+      );
+    };
+
+    const result = await discoverPublicWeb(
+      { maxResults: 50 },
+      request as typeof fetch,
+    );
+
+    expect(result.candidates).toEqual([
+      expect.objectContaining({
+        url: "https://pay.ldxp.cn/item/new-k12",
+        engine: "priceai",
+        focus: "K12",
+        sourceUrl: "https://priceai.cc/products/chatgpt-team-business",
+        metadata: expect.objectContaining({
+          price: 0.88,
+          inventory: 18,
+          merchantName: "公开商铺",
+          availability: "IN_STOCK",
+          observedAt: "2026-07-15T09:00:00.000Z",
+        }),
+      }),
+    ]);
+    expect(result.engines[0]).toEqual({
+      engine: "priceai",
+      status: "ACTIVE",
+      resultCount: 1,
+      errorCategory: null,
+    });
+  });
+
   it("isolates optional search engine failures", async () => {
     const request = async (input: Parameters<typeof fetch>[0]) => {
       const url = new URL(String(input));
+      if (url.hostname === "priceai.cc") {
+        return new Response(priceAiPage());
+      }
       if (url.hostname === "www.bing.com") {
         return new Response(
           "<rss><channel><title>empty</title></channel></rss>",
@@ -224,6 +298,7 @@ describe("public web discovery", () => {
 
     expect(result.candidates).toHaveLength(1);
     expect(result.engines).toEqual([
+      expect.objectContaining({ engine: "priceai", status: "ACTIVE" }),
       expect.objectContaining({ engine: "bing-rss", status: "ACTIVE" }),
       expect.objectContaining({ engine: "brave", status: "RATE_LIMITED" }),
       expect.objectContaining({ engine: "google", status: "ACTIVE" }),

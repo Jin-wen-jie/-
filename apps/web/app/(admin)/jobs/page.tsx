@@ -11,6 +11,7 @@ interface SourceView {
   lastRunAt: string | null;
   discovered: number;
   errorCategory: string | null;
+  engineSummary: string;
 }
 
 const columns: Column<SourceView>[] = [
@@ -62,6 +63,15 @@ const columns: Column<SourceView>[] = [
       ) : (
         <span className="text-gray-400">—</span>
       ),
+  },
+  {
+    key: "engines",
+    header: "采集引擎",
+    render: (row) => (
+      <span className="max-w-md text-xs leading-5 text-gray-600">
+        {row.engineSummary || "—"}
+      </span>
+    ),
   },
 ];
 
