@@ -36,6 +36,11 @@ export function DashboardView({
   counts: { candidates: number; merchants: number; listings: number };
 }) {
   const [tab, setTab] = useState<"price" | "supply">("price");
+  const [refreshDiagnostic, setRefreshDiagnostic] = useState({
+    attempted: 0,
+    updated: 0,
+    failures: "",
+  });
   const router = useRouter();
   const rowsRef = useRef(rows);
 
@@ -53,11 +58,27 @@ export function DashboardView({
         rowsRef.current.map(refreshLdxpCandidate),
       );
       running = false;
+      const updated = results.filter(
+        (result) => result.status === "fulfilled" && result.value,
+      ).length;
+      setRefreshDiagnostic({
+        attempted: results.length,
+        updated,
+        failures: [
+          ...new Set(
+            results.flatMap((result) =>
+              result.status === "rejected"
+                ? [clientFailureCategory(result.reason)]
+                : result.value
+                  ? []
+                  : ["NOT_UPDATED"]
+            ),
+          ),
+        ].join(","),
+      });
       if (
         !stopped &&
-        results.some(
-          (result) => result.status === "fulfilled" && result.value,
-        )
+        updated > 0
       ) {
         router.refresh();
       }
@@ -71,7 +92,11 @@ export function DashboardView({
   }, [router]);
 
   return (
-    <div>
+    <div
+      data-client-refresh-attempted={refreshDiagnostic.attempted}
+      data-client-refresh-updated={refreshDiagnostic.updated}
+      data-client-refresh-failures={refreshDiagnostic.failures}
+    >
       <h2 className="mb-1 text-xl font-bold text-gray-900">K12 / Bug Team 比价总览</h2>
       <p className="mb-4 text-xs text-gray-500">
         PostgreSQL 事实数据：{counts.candidates} 条候选 · {counts.merchants} 个保留商家 · {counts.listings} 条已通过商品。总览直接展示候选审核中点击“通过”的 K12 / Bug Team 商品。
@@ -106,7 +131,7 @@ async function refreshLdxpCandidate(row: RankingView): Promise<boolean> {
     typeof user.nickname !== "string" ||
     typeof user.token !== "string" ||
     typeof user.link !== "string"
-  ) return false;
+  ) throw new Error("INVALID_GOODS_RESPONSE");
 
   const channelResult = await postLdxp("/shopApi/Shop/getUserChannel", {
     token: user.token,
@@ -125,7 +150,7 @@ async function refreshLdxpCandidate(row: RankingView): Promise<boolean> {
     priceResult.code !== 1 ||
     typeof checkout.original_amount !== "number" ||
     typeof checkout.total_amount !== "number"
-  ) return false;
+  ) throw new Error("INVALID_PRICE_RESPONSE");
 
   const response = await fetch("/api/candidates", {
     method: "PUT",
@@ -150,6 +175,7 @@ async function refreshLdxpCandidate(row: RankingView): Promise<boolean> {
       },
     }),
   });
+  if (!response.ok) throw new Error(`WRITE_HTTP_${response.status}`);
   return response.ok;
 }
 
@@ -184,4 +210,12 @@ function readCsrfToken(): string {
     if (cookie) return decodeURIComponent(cookie.slice(prefix.length));
   }
   return "";
+}
+
+function clientFailureCategory(error: unknown): string {
+  if (!(error instanceof Error)) return "CLIENT_REFRESH_FAILED";
+  if (/^[A-Z0-9_]+$/.test(error.message)) return error.message;
+  if (error instanceof TypeError) return "BROWSER_FETCH_FAILED";
+  if (error.name === "TimeoutError") return "TIMEOUT";
+  return "CLIENT_REFRESH_FAILED";
 }
