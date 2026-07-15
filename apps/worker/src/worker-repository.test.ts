@@ -1,5 +1,6 @@
 import {
   createDb,
+  candidateObservations,
   discoveryCandidates,
   discoveryEvents,
   linkChecks,
@@ -10,6 +11,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   createWorkerRepository,
   createWorkerRepositoryFromDb,
+  classifyCandidateChange,
   isK12AbovePriceLimit,
   mergeCandidateExtraction,
 } from "./worker-repository.js";
@@ -43,6 +45,21 @@ vi.mock("@compare/db", async (importOriginal) => {
 });
 
 describe("worker repository mappings", () => {
+  it("classifies price drops, restocks, and suspicious jumps", () => {
+    expect(classifyCandidateChange(
+      { price: 1.2, availability: "OUT_OF_STOCK" },
+      { price: 1.05, availability: "IN_STOCK" },
+    )).toMatchObject({
+      anomalous: false,
+      priceDropped: true,
+      restocked: true,
+    });
+    expect(classifyCandidateChange(
+      { price: 1 },
+      { price: 2 },
+    )).toMatchObject({ anomalous: true, priceDropped: false });
+  });
+
   it.each([
     [{ focus: "K12", totalPrice: "1.21", price: "1.00" }, true],
     [{ focus: "K12", totalPrice: 1.2, price: "9.00" }, false],
@@ -468,6 +485,7 @@ describe("public search persistence", () => {
       }),
     });
     const eventValues = vi.fn().mockResolvedValue(undefined);
+    const observationValues = vi.fn().mockResolvedValue(undefined);
     const sourceOnConflict = vi.fn().mockResolvedValue(undefined);
     const sourceValues = vi.fn().mockReturnValue({
       onConflictDoUpdate: sourceOnConflict,
@@ -475,10 +493,27 @@ describe("public search persistence", () => {
     const insert = vi.fn((table: unknown) => {
       if (table === discoveryCandidates) return { values: candidateValues };
       if (table === discoveryEvents) return { values: eventValues };
+      if (table === candidateObservations) {
+        return { values: observationValues };
+      }
       if (table === watchSources) return { values: sourceValues };
       throw new Error("unexpected table");
     });
-    const tx = { insert };
+    const selectLimit = vi.fn()
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{
+        id: "candidate-existing",
+        extractionResult: {},
+      }]);
+    const selectWhere = vi.fn().mockReturnValue({ limit: selectLimit });
+    const selectFrom = vi.fn().mockReturnValue({ where: selectWhere });
+    const updateWhere = vi.fn().mockResolvedValue(undefined);
+    const updateSet = vi.fn().mockReturnValue({ where: updateWhere });
+    const tx = {
+      insert,
+      select: vi.fn().mockReturnValue({ from: selectFrom }),
+      update: vi.fn().mockReturnValue({ set: updateSet }),
+    };
     const db = {
       transaction: vi.fn(async (
         operation: (transaction: typeof tx) => Promise<unknown>,
@@ -553,6 +588,7 @@ describe("public search persistence", () => {
       }),
     );
     expect(eventValues).toHaveBeenCalledOnce();
+    expect(observationValues).toHaveBeenCalledTimes(2);
     expect(eventValues).toHaveBeenCalledWith(
       expect.objectContaining({
         sourceUrl: "https://priceai.cc/products/chatgpt-team-business",

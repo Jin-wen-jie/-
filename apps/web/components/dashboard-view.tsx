@@ -13,6 +13,7 @@ const priceColumns: Column<RankingView>[] = [
   { key: "spec", header: "规格", render: (row) => <span className="text-xs text-gray-800">{row.spec}</span> },
   { key: "merchant", header: "商家", render: (row) => <span className="text-xs font-semibold text-gray-900">{row.merchant}</span> },
   { key: "availability", header: "库存", render: (row) => <AvailabilityBadge availability={row.availability} /> },
+  { key: "recommendation", header: "推荐度", render: (row) => <span className={`font-mono text-xs font-semibold ${(row.confidence ?? 0) >= 80 ? "text-green-700" : "text-gray-700"}`}>{row.confidence === null ? "—" : `${row.confidence}%`}</span> },
   { key: "product", header: "商品页", render: (row) => <ExternalLink href={row.productUrl}>打开</ExternalLink> },
   { key: "source", header: "公开来源", render: (row) => row.sourceUrl ? <ExternalLink href={row.sourceUrl}>来源</ExternalLink> : <span className="text-xs text-gray-500">手工</span> },
   { key: "verified", header: "最后成功核验", render: (row) => <span className="text-xs text-gray-600">{new Date(row.lastVerified).toLocaleString("zh-CN")}</span> },

@@ -14,6 +14,7 @@ import {
   listCandidates,
   normalizeCandidate,
   reviewCandidate,
+  reviewCandidates,
 } from "./candidate-repository.js";
 
 describe("candidate repository listing", () => {
@@ -57,6 +58,46 @@ describe("candidate repository listing", () => {
     expect(sqlQuery.sql).toContain("totalPrice");
     expect(sqlQuery.sql).toContain("price");
     expect(sqlQuery.sql.match(/\)::numeric/g)).toHaveLength(4);
+  });
+});
+
+describe("candidate repository bulk review", () => {
+  it("reviews unique pending candidates in one transaction", async () => {
+    const returning = vi.fn().mockResolvedValue([
+      { id: "candidate-1" },
+      { id: "candidate-2" },
+    ]);
+    const updateQuery = {
+      set: vi.fn(),
+      where: vi.fn(),
+      returning,
+    };
+    updateQuery.set.mockReturnValue(updateQuery);
+    updateQuery.where.mockReturnValue(updateQuery);
+    const auditValues = vi.fn().mockResolvedValue(undefined);
+    const transaction = vi.fn(async (operation: (tx: unknown) => unknown) =>
+      operation({
+        update: vi.fn().mockReturnValue(updateQuery),
+        insert: vi.fn().mockReturnValue({ values: auditValues }),
+      })
+    );
+    mocks.getDatabase.mockReturnValue({ transaction });
+
+    await expect(reviewCandidates(
+      ["candidate-1", "candidate-2", "candidate-1"],
+      "reject",
+      "重复商品",
+    )).resolves.toEqual({
+      updated: 2,
+      ids: ["candidate-1", "candidate-2"],
+    });
+    expect(transaction).toHaveBeenCalledOnce();
+    expect(auditValues).toHaveBeenCalledWith(expect.arrayContaining([
+      expect.objectContaining({
+        action: "candidate.reject.bulk",
+        candidateId: "candidate-1",
+      }),
+    ]));
   });
 });
 

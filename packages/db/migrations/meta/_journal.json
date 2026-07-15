@@ -15,6 +15,13 @@
       "when": 1783820394123,
       "tag": "0001_omniscient_lockheed",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1784111872964,
+      "tag": "0002_numerous_dark_beast",
+      "breakpoints": true
     }
   ]
 }

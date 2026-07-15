@@ -1,6 +1,7 @@
 import {
   boolean,
   check,
+  index,
   integer,
   jsonb,
   numeric,
@@ -234,6 +235,55 @@ export const listingObservations = pgTable("listing_observations", {
     .notNull()
     .defaultNow(),
 });
+
+export const candidateObservations = pgTable(
+  "candidate_observations",
+  {
+    id: text("id").primaryKey(),
+    candidateId: text("candidate_id")
+      .notNull()
+      .references(() => discoveryCandidates.id),
+    price: numeric("price"),
+    totalPrice: numeric("total_price"),
+    currency: varchar("currency", { length: 10 }),
+    inventory: integer("inventory"),
+    availability: text("availability"),
+    sourceEngine: varchar("source_engine", { length: 50 }),
+    anomalous: boolean("anomalous").notNull().default(false),
+    observedAt: timestamp("observed_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    index("candidate_observations_candidate_time_idx").on(
+      table.candidateId,
+      table.observedAt,
+    ),
+  ],
+);
+
+export const alertEvents = pgTable(
+  "alert_events",
+  {
+    id: text("id").primaryKey(),
+    candidateId: text("candidate_id")
+      .notNull()
+      .references(() => discoveryCandidates.id),
+    kind: varchar("kind", { length: 50 }).notNull(),
+    severity: varchar("severity", { length: 20 }).notNull(),
+    title: text("title").notNull(),
+    detail: jsonb("detail"),
+    dedupeKey: text("dedupe_key").notNull(),
+    acknowledged: boolean("acknowledged").notNull().default(false),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("alert_events_dedupe_key_idx").on(table.dedupeKey),
+    index("alert_events_created_at_idx").on(table.createdAt),
+  ],
+);
 
 export const linkChecks = pgTable("link_checks", {
   id: text("id").primaryKey(),

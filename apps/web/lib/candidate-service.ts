@@ -27,6 +27,9 @@ export interface CandidateViewInput {
   comparisonKey?: string | null;
   specId?: string | null;
   createdAt: Date;
+  observationCount?: number;
+  anomalyCount?: number;
+  previousPrice?: string | null;
 }
 
 export interface CandidateView {
@@ -46,6 +49,9 @@ export interface CandidateView {
   sold: number | null;
   inventory: number | null;
   canApprove: boolean;
+  confidence: number;
+  observationCount: number;
+  priceTrendPercent: number | null;
   createdAt: string;
 }
 
@@ -71,6 +77,10 @@ export function canNormalizeCandidateStatus(status: string): boolean {
 export function toCandidateView(input: CandidateViewInput): CandidateView {
   const extraction = extractionSchema.safeParse(input.extractionResult);
   const data = extraction.success ? extraction.data : {};
+  const currentPrice = numericValue(data.price);
+  const previousPrice = numericValue(input.previousPrice);
+  const observationCount = Math.max(0, input.observationCount ?? 0);
+  const anomalyCount = Math.max(0, input.anomalyCount ?? 0);
 
   return {
     id: input.id,
@@ -89,6 +99,51 @@ export function toCandidateView(input: CandidateViewInput): CandidateView {
     sold: data.sold ?? null,
     inventory: data.inventory ?? null,
     canApprove: Boolean(input.comparisonKey && input.specId),
+    confidence: candidateConfidence({
+      availability: data.availability,
+      merchantUrl: data.merchantUrl,
+      sourceUrl: data.sourceUrl ?? input.eventSourceUrl,
+      observedAt: data.observedAt,
+      observationCount,
+      anomalyCount,
+    }),
+    observationCount,
+    priceTrendPercent:
+      currentPrice !== null && previousPrice !== null && previousPrice > 0
+        ? Math.round(((currentPrice - previousPrice) / previousPrice) * 1_000) /
+          10
+        : null,
     createdAt: input.createdAt.toISOString(),
   };
+}
+
+function candidateConfidence(input: {
+  availability?: string;
+  merchantUrl?: string;
+  sourceUrl: string | null;
+  observedAt?: string;
+  observationCount: number;
+  anomalyCount: number;
+}): number {
+  let score = 45;
+  if (input.availability === "IN_STOCK") score += 20;
+  if (input.merchantUrl) score += 10;
+  if (input.sourceUrl) score += 5;
+  if (input.observedAt) {
+    const ageMs = Date.now() - new Date(input.observedAt).getTime();
+    if (Number.isFinite(ageMs) && ageMs <= 15 * 60 * 1_000) score += 10;
+    else if (Number.isFinite(ageMs) && ageMs <= 24 * 60 * 60 * 1_000) {
+      score += 5;
+    }
+  }
+  score += Math.min(10, input.observationCount * 2);
+  score -= Math.min(30, input.anomalyCount * 15);
+  return Math.max(0, Math.min(100, score));
+}
+
+function numericValue(value: unknown): number | null {
+  if (typeof value === "number") return Number.isFinite(value) ? value : null;
+  if (typeof value !== "string" || value.trim() === "") return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
 }

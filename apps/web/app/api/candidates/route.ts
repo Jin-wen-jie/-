@@ -3,6 +3,7 @@ import { z } from "zod";
 import {
   createManualCandidate,
   listCandidates,
+  reviewCandidates,
 } from "../../../lib/candidate-repository";
 import {
   ldxpListingSnapshotSchema,
@@ -33,6 +34,12 @@ const priceSnapshotSchema = z.object({
 
 const priceSnapshotBatchSchema = z.object({
   snapshots: z.array(priceSnapshotSchema).min(1).max(100),
+});
+
+const batchReviewSchema = z.object({
+  ids: z.array(z.string().min(1)).min(1).max(100),
+  action: z.enum(["approve", "reject"]),
+  reason: z.string().trim().max(500).optional(),
 });
 
 export async function GET(request: Request) {
@@ -107,4 +114,26 @@ export async function PUT(request: Request) {
     { updated },
     { status: updated > 0 ? 200 : 404 },
   );
+}
+
+export async function PATCH(request: Request) {
+  const authorization = await assertAdminMutation(request);
+  if (!authorization.ok) {
+    return NextResponse.json(
+      { error: authorization.error },
+      { status: authorization.status },
+    );
+  }
+  const body = batchReviewSchema.safeParse(
+    await request.json().catch(() => ({})),
+  );
+  if (!body.success) {
+    return NextResponse.json({ error: "批量审核参数无效" }, { status: 400 });
+  }
+  const result = await reviewCandidates(
+    body.data.ids,
+    body.data.action,
+    body.data.reason,
+  );
+  return NextResponse.json(result);
 }

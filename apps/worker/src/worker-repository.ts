@@ -1,7 +1,9 @@
 import { createHash, randomUUID } from "node:crypto";
 import {
   and,
+  alertEvents,
   asc,
+  candidateObservations,
   createDb,
   discoveryCandidates,
   discoveryEvents,
@@ -23,6 +25,7 @@ import {
 } from "./validator-client.js";
 import {
   DEFAULT_PUBLIC_SEARCH_QUERIES,
+  type PublicSearchCandidate,
   type PublicSearchResult,
 } from "./jobs/revalidate.js";
 
@@ -84,6 +87,8 @@ export const CANDIDATE_VALIDATION_LEASE_MS = 5 * 60 * 1_000;
 const MAX_DISCOVERED_PLATFORM_LINKS = 50;
 const MAX_DISCOVERED_URL_LENGTH = 2_048;
 const MAX_PUBLIC_SEARCH_CANDIDATES = 200;
+const PRICE_CHANGE_ALERT_RATIO = 0.1;
+const PRICE_ANOMALY_RATIO = 0.5;
 
 interface WorkerRepositoryOptions {
   now?: () => Date;
@@ -340,48 +345,92 @@ export function createWorkerRepositoryFromDb(
           if (canonicalUrl.length > MAX_DISCOVERED_URL_LENGTH) continue;
           const id = randomUUID();
           const eventId = randomUUID();
+          const fingerprint = fingerprintUrl(canonicalUrl);
+          const [previous] = await tx
+            .select({
+              id: discoveryCandidates.id,
+              extractionResult: discoveryCandidates.extractionResult,
+            })
+            .from(discoveryCandidates)
+            .where(eq(discoveryCandidates.urlFingerprint, fingerprint))
+            .limit(1);
+          const nextExtraction = publicSearchExtraction(candidate, observedAt);
+          const previousExtraction = isRecord(previous?.extractionResult)
+            ? previous.extractionResult
+            : {};
+          const change = classifyCandidateChange(
+            previousExtraction,
+            nextExtraction,
+          );
           const [saved] = await tx
             .insert(discoveryCandidates)
             .values({
               id,
               productUrl: canonicalUrl,
               canonicalUrl,
-              urlFingerprint: fingerprintUrl(canonicalUrl),
+              urlFingerprint: fingerprint,
               sourceType: "manual",
               discoveryEventId: eventId,
               status: "DISCOVERED",
-              extractionResult: {
-                pageTitle: candidate.title || undefined,
-                focus: candidate.focus,
-                sourceEngine: candidate.engine,
-                ...(candidate.sourceUrl
-                  ? { sourceUrl: candidate.sourceUrl }
-                  : {}),
-                ...candidate.metadata,
-                searchSnippet: candidate.snippet || undefined,
-                note:
-                  `Public listing discovered through ${candidate.engine}; ` +
-                  "price and stock require direct page validation.",
-                observedAt: candidate.metadata?.observedAt ??
-                  observedAt.toISOString(),
-              },
+              extractionResult: nextExtraction,
               createdAt: observedAt,
               updatedAt: observedAt,
             })
             .onConflictDoNothing({ target: discoveryCandidates.urlFingerprint })
             .returning({ id: discoveryCandidates.id });
-          if (!saved) continue;
-          await tx.insert(discoveryEvents).values({
-            id: eventId,
-            sourceUrl: candidate.sourceUrl ?? canonicalUrl,
-            platform: candidate.engine,
-            summary: [candidate.title, candidate.snippet]
-              .filter(Boolean)
-              .join(" - ")
-              .slice(0, 2_000),
-            discoveredAt: observedAt,
+          const candidateId = saved?.id ?? previous?.id;
+          if (!candidateId) continue;
+          if (saved) {
+            await tx.insert(discoveryEvents).values({
+              id: eventId,
+              sourceUrl: candidate.sourceUrl ?? canonicalUrl,
+              platform: candidate.engine,
+              summary: [candidate.title, candidate.snippet]
+                .filter(Boolean)
+                .join(" - ")
+                .slice(0, 2_000),
+              discoveredAt: observedAt,
+            });
+            inserted++;
+          } else if (!change.anomalous && previous) {
+            await tx
+              .update(discoveryCandidates)
+              .set({
+                extractionResult: {
+                  ...previousExtraction,
+                  ...nextExtraction,
+                },
+                updatedAt: observedAt,
+              })
+              .where(eq(discoveryCandidates.id, previous.id));
+          }
+
+          await tx.insert(candidateObservations).values({
+            id: randomUUID(),
+            candidateId,
+            ...(candidate.metadata?.price === undefined
+              ? {}
+              : { price: String(candidate.metadata.price) }),
+            ...(candidate.metadata?.price === undefined
+              ? {}
+              : { totalPrice: String(candidate.metadata.price) }),
+            currency: candidate.metadata?.currency ?? null,
+            inventory: candidate.metadata?.inventory ?? null,
+            availability: candidate.metadata?.availability ?? "UNKNOWN",
+            sourceEngine: candidate.engine,
+            anomalous: change.anomalous,
+            observedAt,
           });
-          inserted++;
+          for (const alert of buildCandidateAlerts(
+            candidateId,
+            candidate.title,
+            change,
+            observedAt,
+          )) {
+            await tx.insert(alertEvents).values(alert).onConflictDoNothing({
+              target: alertEvents.dedupeKey,
+            });
+          }
         }
 
         const status = publicSearchStatus(result);
@@ -519,6 +568,119 @@ function describeFailure(error: unknown): { code: string; message: string } {
   return { code, message: redactQueryStrings(message).slice(0, 2_000) };
 }
 
+interface CandidateChange {
+  previousPrice: number | null;
+  currentPrice: number | null;
+  previousAvailability: string | null;
+  currentAvailability: string | null;
+  anomalous: boolean;
+  priceDropped: boolean;
+  restocked: boolean;
+}
+
+function publicSearchExtraction(
+  candidate: PublicSearchCandidate,
+  observedAt: Date,
+): Record<string, unknown> {
+  return {
+    pageTitle: candidate.title || undefined,
+    focus: candidate.focus,
+    sourceEngine: candidate.engine,
+    ...(candidate.sourceUrl ? { sourceUrl: candidate.sourceUrl } : {}),
+    ...candidate.metadata,
+    searchSnippet: candidate.snippet || undefined,
+    note:
+      `Public listing discovered through ${candidate.engine}; ` +
+      "price and stock require direct page validation.",
+    observedAt: candidate.metadata?.observedAt ?? observedAt.toISOString(),
+  };
+}
+
+export function classifyCandidateChange(
+  previous: Record<string, unknown>,
+  current: Record<string, unknown>,
+): CandidateChange {
+  const previousPrice = positiveNumber(previous.totalPrice) ??
+    positiveNumber(previous.price);
+  const currentPrice = positiveNumber(current.totalPrice) ??
+    positiveNumber(current.price);
+  const previousAvailability = stringValue(previous.availability);
+  const currentAvailability = stringValue(current.availability);
+  const ratio = previousPrice === null || currentPrice === null
+    ? 0
+    : Math.abs(currentPrice - previousPrice) / previousPrice;
+  const anomalous = ratio > PRICE_ANOMALY_RATIO;
+  return {
+    previousPrice,
+    currentPrice,
+    previousAvailability,
+    currentAvailability,
+    anomalous,
+    priceDropped:
+      !anomalous &&
+      previousPrice !== null &&
+      currentPrice !== null &&
+      currentPrice < previousPrice &&
+      (previousPrice - currentPrice) / previousPrice >=
+        PRICE_CHANGE_ALERT_RATIO,
+    restocked:
+      previousAvailability === "OUT_OF_STOCK" &&
+      currentAvailability === "IN_STOCK",
+  };
+}
+
+function buildCandidateAlerts(
+  candidateId: string,
+  title: string,
+  change: CandidateChange,
+  observedAt: Date,
+) {
+  const alerts: Array<typeof alertEvents.$inferInsert> = [];
+  if (change.anomalous) {
+    alerts.push({
+      id: randomUUID(),
+      candidateId,
+      kind: "PRICE_ANOMALY",
+      severity: "warning",
+      title: `价格异常：${title || "未命名商品"}`,
+      detail: {
+        previousPrice: change.previousPrice,
+        currentPrice: change.currentPrice,
+      },
+      dedupeKey:
+        `${candidateId}:PRICE_ANOMALY:${change.currentPrice ?? "unknown"}`,
+      createdAt: observedAt,
+    });
+  } else if (change.priceDropped) {
+    alerts.push({
+      id: randomUUID(),
+      candidateId,
+      kind: "PRICE_DROP",
+      severity: "info",
+      title: `价格下降：${title || "未命名商品"}`,
+      detail: {
+        previousPrice: change.previousPrice,
+        currentPrice: change.currentPrice,
+      },
+      dedupeKey: `${candidateId}:PRICE_DROP:${change.currentPrice}`,
+      createdAt: observedAt,
+    });
+  }
+  if (change.restocked) {
+    alerts.push({
+      id: randomUUID(),
+      candidateId,
+      kind: "RESTOCKED",
+      severity: "info",
+      title: `恢复库存：${title || "未命名商品"}`,
+      detail: { availability: change.currentAvailability },
+      dedupeKey: `${candidateId}:RESTOCKED:${observedAt.toISOString()}`,
+      createdAt: observedAt,
+    });
+  }
+  return alerts;
+}
+
 function redactQueryStrings(message: string): string {
   return message.replace(/https?:\/\/[^\s]+/g, (rawUrl) => {
     try {
@@ -533,6 +695,10 @@ function redactQueryStrings(message: string): string {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function stringValue(value: unknown): string | null {
+  return typeof value === "string" && value.length > 0 ? value : null;
 }
 
 function canonicalizeUrl(productUrl: string): string {

@@ -11,7 +11,7 @@ on:
       - "packages/db/src/seed-run.ts"
       - "apps/worker/**"
   schedule:
-    - cron: "0 */3 * * *"
+    - cron: "*/5 * * * *"
   workflow_dispatch: {}
 
 permissions:

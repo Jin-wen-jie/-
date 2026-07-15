@@ -1,8 +1,11 @@
+import { randomUUID } from "node:crypto";
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
 import {
   discoveryCandidates,
   discoveryEvents,
+  alertEvents,
+  candidateObservations,
   listings,
   merchants,
   productSpecs,
@@ -38,7 +41,14 @@ export async function listRankingViews(limit = 200): Promise<RankingView[]> {
 
   return rows
     .map(toApprovedCandidateRankingView)
-    .sort((left, right) => moneyValue(left.unitCny) - moneyValue(right.unitCny));
+    .sort((left, right) => {
+      const stockOrder = Number(right.availability === "IN_STOCK") -
+        Number(left.availability === "IN_STOCK");
+      if (stockOrder !== 0) return stockOrder;
+      const confidenceOrder = (right.confidence ?? 0) - (left.confidence ?? 0);
+      if (confidenceOrder !== 0) return confidenceOrder;
+      return moneyValue(left.unitCny) - moneyValue(right.unitCny);
+    });
 }
 
 const ldxpGoodsSchema = z.object({
@@ -219,50 +229,10 @@ export async function updateCandidateSnapshot(
   id: string,
   snapshotInput: LdxpListingSnapshot,
 ): Promise<boolean> {
-  const snapshot = ldxpListingSnapshotSchema.parse(snapshotInput);
-  const db = getDatabase();
-  const [candidate] = await db
-    .select({ extractionResult: discoveryCandidates.extractionResult })
-    .from(discoveryCandidates)
-    .where(
-      and(
-        eq(discoveryCandidates.id, id),
-        inArray(discoveryCandidates.status, [
-          "DISCOVERED",
-          "REVIEW_REQUIRED",
-          "APPROVED",
-        ]),
-      ),
-    )
-    .limit(1);
-  if (!candidate) return false;
-
-  const observedAt = new Date();
-  const existing = isRecord(candidate.extractionResult)
-    ? candidate.extractionResult
-    : {};
-  const [updated] = await db
-    .update(discoveryCandidates)
-    .set({
-      extractionResult: {
-        ...existing,
-        ...snapshot,
-        observedAt: observedAt.toISOString(),
-      },
-      updatedAt: observedAt,
-    })
-    .where(
-      and(
-        eq(discoveryCandidates.id, id),
-        inArray(discoveryCandidates.status, [
-          "DISCOVERED",
-          "REVIEW_REQUIRED",
-          "APPROVED",
-        ]),
-      ),
-    )
-    .returning({ id: discoveryCandidates.id });
-  return Boolean(updated);
+  return (await updateCandidateSnapshots([{
+    id,
+    snapshot: ldxpListingSnapshotSchema.parse(snapshotInput),
+  }])) > 0;
 }
 
 export async function updateCandidateSnapshots(
@@ -305,6 +275,33 @@ export async function updateCandidateSnapshots(
       if (!extractionById.has(id)) continue;
       const extractionResult = extractionById.get(id);
       const existing = isRecord(extractionResult) ? extractionResult : {};
+      const change = candidateSnapshotChange(existing, snapshot);
+      await tx.insert(candidateObservations).values({
+        id: randomUUID(),
+        candidateId: id,
+        price: String(snapshot.price),
+        totalPrice: String(snapshot.totalPrice),
+        currency: "CNY",
+        availability: snapshot.availability,
+        sourceEngine: "direct",
+        anomalous: change.anomalous,
+        observedAt,
+      });
+      const alert = candidateSnapshotAlert(
+        id,
+        snapshot.pageTitle,
+        change,
+        observedAt,
+      );
+      if (alert) {
+        await tx.insert(alertEvents).values(alert).onConflictDoNothing({
+          target: alertEvents.dedupeKey,
+        });
+      }
+      if (change.anomalous) {
+        updated++;
+        continue;
+      }
       const [row] = await tx
         .update(discoveryCandidates)
         .set({
@@ -331,6 +328,82 @@ export async function updateCandidateSnapshots(
 
     return updated;
   }));
+}
+
+function candidateSnapshotChange(
+  existing: Record<string, unknown>,
+  snapshot: LdxpListingSnapshot,
+) {
+  const previousPrice = positiveNumber(existing.totalPrice) ??
+    positiveNumber(existing.price);
+  const currentPrice = snapshot.totalPrice || snapshot.price;
+  const ratio = previousPrice === null || currentPrice <= 0
+    ? 0
+    : Math.abs(currentPrice - previousPrice) / previousPrice;
+  return {
+    previousPrice,
+    currentPrice,
+    anomalous: ratio > 0.5,
+    priceDropped:
+      previousPrice !== null &&
+      currentPrice < previousPrice &&
+      (previousPrice - currentPrice) / previousPrice >= 0.1 &&
+      ratio <= 0.5,
+    restocked:
+      existing.availability === "OUT_OF_STOCK" &&
+      snapshot.availability === "IN_STOCK",
+  };
+}
+
+function candidateSnapshotAlert(
+  candidateId: string,
+  title: string,
+  change: ReturnType<typeof candidateSnapshotChange>,
+  observedAt: Date,
+): typeof alertEvents.$inferInsert | null {
+  if (change.anomalous) {
+    return {
+      id: randomUUID(),
+      candidateId,
+      kind: "PRICE_ANOMALY",
+      severity: "warning",
+      title: `价格异常：${title}`,
+      detail: {
+        previousPrice: change.previousPrice,
+        currentPrice: change.currentPrice,
+      },
+      dedupeKey: `${candidateId}:PRICE_ANOMALY:${change.currentPrice}`,
+      createdAt: observedAt,
+    };
+  }
+  if (change.priceDropped) {
+    return {
+      id: randomUUID(),
+      candidateId,
+      kind: "PRICE_DROP",
+      severity: "info",
+      title: `价格下降：${title}`,
+      detail: {
+        previousPrice: change.previousPrice,
+        currentPrice: change.currentPrice,
+      },
+      dedupeKey: `${candidateId}:PRICE_DROP:${change.currentPrice}`,
+      createdAt: observedAt,
+    };
+  }
+  if (change.restocked) {
+    return {
+      id: randomUUID(),
+      candidateId,
+      kind: "RESTOCKED",
+      severity: "info",
+      title: `恢复库存：${title}`,
+      detail: { availability: "IN_STOCK" },
+      dedupeKey: `${candidateId}:RESTOCKED:${observedAt.toISOString()}`,
+      createdAt: observedAt,
+    };
+  }
+  return null;
 }
 
 async function postLdxp(
@@ -374,18 +447,38 @@ export async function listMerchantViews() {
       homepageUrl: merchants.homepageUrl,
       platform: merchants.platform,
       activeListings: sql<number>`count(${listings.id}) filter (where ${listings.status} = ${"ACTIVE"})::int`,
+      totalListings: sql<number>`count(${listings.id})::int`,
+      totalFailures: sql<number>`coalesce(sum(${listings.consecutiveFailures}), 0)::int`,
       lastVerifiedAt: merchants.lastVerifiedAt,
       status: merchants.status,
     })
     .from(merchants)
     .leftJoin(listings, eq(listings.merchantId, merchants.id))
     .groupBy(merchants.id));
-  return rows.map((merchant) => ({
-    ...merchant,
-    platform: merchant.platform ?? "—",
-    activeListings: Number(merchant.activeListings),
-    lastVerifiedAt: merchant.lastVerifiedAt?.toISOString() ?? null,
-  }));
+  return rows.map((merchant) => {
+    const activeListings = Number(merchant.activeListings);
+    const totalListings = Number(merchant.totalListings);
+    const totalFailures = Number(merchant.totalFailures);
+    const activeRatio = totalListings === 0 ? 0 : activeListings / totalListings;
+    const freshness = merchant.lastVerifiedAt &&
+        Date.now() - merchant.lastVerifiedAt.getTime() <= 24 * 60 * 60 * 1_000
+      ? 10
+      : 0;
+    return {
+      ...merchant,
+      platform: merchant.platform ?? "—",
+      activeListings,
+      totalListings,
+      reliabilityScore: Math.max(
+        0,
+        Math.min(
+          100,
+          Math.round(55 + activeRatio * 30 + freshness - totalFailures * 5),
+        ),
+      ),
+      lastVerifiedAt: merchant.lastVerifiedAt?.toISOString() ?? null,
+    };
+  });
 }
 
 export async function listSpecViews() {
@@ -434,6 +527,67 @@ export async function listSourceViews() {
   });
 }
 
+export async function getCollectionIntelligence() {
+  const db = getDatabase();
+  const [row] = await withDatabaseRetry(() => db
+    .select({
+      observations: sql<number>`(select count(*)::int from ${candidateObservations})`,
+      anomalies: sql<number>`(select count(*)::int from ${candidateObservations} where ${candidateObservations.anomalous} = true)`,
+      pending: sql<number>`(select count(*)::int from ${discoveryCandidates} where ${discoveryCandidates.status} in ('DISCOVERED', 'REVIEW_REQUIRED'))`,
+      approved: sql<number>`(select count(*)::int from ${discoveryCandidates} where ${discoveryCandidates.status} = 'APPROVED')`,
+      rejected: sql<number>`(select count(*)::int from ${discoveryCandidates} where ${discoveryCandidates.status} = 'REJECTED')`,
+      alerts: sql<number>`(select count(*)::int from ${alertEvents} where ${alertEvents.acknowledged} = false)`,
+    })
+    .from(sql`(select 1) as singleton`));
+  return {
+    observations: Number(row?.observations ?? 0),
+    anomalies: Number(row?.anomalies ?? 0),
+    pending: Number(row?.pending ?? 0),
+    approved: Number(row?.approved ?? 0),
+    rejected: Number(row?.rejected ?? 0),
+    alerts: Number(row?.alerts ?? 0),
+  };
+}
+
+export async function listAlertViews(limit = 20) {
+  const db = getDatabase();
+  const boundedLimit = Math.min(100, Math.max(1, Math.floor(limit)));
+  const rows = await withDatabaseRetry(() => db
+    .select({
+      id: alertEvents.id,
+      kind: alertEvents.kind,
+      severity: alertEvents.severity,
+      title: alertEvents.title,
+      detail: alertEvents.detail,
+      acknowledged: alertEvents.acknowledged,
+      createdAt: alertEvents.createdAt,
+      productUrl: discoveryCandidates.productUrl,
+    })
+    .from(alertEvents)
+    .innerJoin(
+      discoveryCandidates,
+      eq(alertEvents.candidateId, discoveryCandidates.id),
+    )
+    .orderBy(desc(alertEvents.createdAt))
+    .limit(boundedLimit));
+  return rows.map((row) => ({
+    ...row,
+    createdAt: row.createdAt.toISOString(),
+    summary: alertDetailSummary(row.detail),
+  }));
+}
+
+function alertDetailSummary(value: unknown): string {
+  if (!isRecord(value)) return "—";
+  const previous = positiveNumber(value.previousPrice);
+  const current = positiveNumber(value.currentPrice);
+  if (previous !== null && current !== null) {
+    return `¥${previous.toFixed(2)} → ¥${current.toFixed(2)}`;
+  }
+  if (value.availability === "IN_STOCK") return "已恢复库存";
+  return "—";
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -444,6 +598,15 @@ function stringValue(value: unknown): string | null {
 
 function numberValue(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function positiveNumber(value: unknown): number | null {
+  const parsed = typeof value === "number"
+    ? value
+    : typeof value === "string"
+      ? Number(value)
+      : Number.NaN;
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
 }
 
 function moneyValue(value: string): number {

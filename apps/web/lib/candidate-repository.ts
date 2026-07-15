@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import {
   auditEvents,
+  candidateObservations,
   discoveryCandidates,
   discoveryEvents,
   productSpecs,
@@ -62,6 +63,26 @@ async function listCandidatesOnce(options: {
       comparisonKey: discoveryCandidates.comparisonKey,
       specId: discoveryCandidates.specId,
       createdAt: discoveryCandidates.createdAt,
+      observationCount: sql<number>`(
+        select count(*)::int from ${candidateObservations}
+        where ${candidateObservations.candidateId} = ${discoveryCandidates.id}
+      )`,
+      anomalyCount: sql<number>`(
+        select count(*)::int from ${candidateObservations}
+        where ${candidateObservations.candidateId} = ${discoveryCandidates.id}
+          and ${candidateObservations.anomalous} = true
+      )`,
+      previousPrice: sql<string | null>`(
+        select coalesce(
+          ${candidateObservations.totalPrice},
+          ${candidateObservations.price}
+        )::text
+        from ${candidateObservations}
+        where ${candidateObservations.candidateId} = ${discoveryCandidates.id}
+          and ${candidateObservations.anomalous} = false
+        order by ${candidateObservations.observedAt} desc
+        offset 1 limit 1
+      )`,
       total: sql<number>`count(*) over()::int`,
     })
     .from(discoveryCandidates)
@@ -215,6 +236,50 @@ export interface SpecInfo {
   commitment: string;
   quota: string;
   comparisonKey: string;
+}
+
+export async function reviewCandidates(
+  ids: string[],
+  action: "approve" | "reject",
+  reason?: string,
+): Promise<{ updated: number; ids: string[] }> {
+  const uniqueIds = [...new Set(ids)].slice(0, 100);
+  if (uniqueIds.length === 0) return { updated: 0, ids: [] };
+  const db = getDatabase();
+  return db.transaction(async (tx) => {
+    const reviewedAt = new Date();
+    const status = action === "approve" ? "APPROVED" : "REJECTED";
+    const rows = await tx
+      .update(discoveryCandidates)
+      .set({
+        status,
+        rejectionReason: action === "reject" ? reason ?? null : null,
+        updatedAt: reviewedAt,
+      })
+      .where(
+        and(
+          inArray(discoveryCandidates.id, uniqueIds),
+          inArray(discoveryCandidates.status, [
+            "DISCOVERED",
+            "REVIEW_REQUIRED",
+          ]),
+        ),
+      )
+      .returning({ id: discoveryCandidates.id });
+
+    if (rows.length > 0) {
+      await tx.insert(auditEvents).values(
+        rows.map((row) => ({
+          id: randomUUID(),
+          action: `candidate.${action}.bulk`,
+          candidateId: row.id,
+          detail: { reason: reason ?? null, batchSize: rows.length },
+          createdAt: reviewedAt,
+        })),
+      );
+    }
+    return { updated: rows.length, ids: rows.map((row) => row.id) };
+  });
 }
 
 export type NormalizeCandidateResult =

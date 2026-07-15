@@ -253,14 +253,14 @@ describe("admin read model", () => {
   });
 
   it("updates live snapshots only for reviewable or approved candidates", async () => {
-    const selectLimit = vi.fn().mockResolvedValue([{ extractionResult: {} }]);
     const selectQuery = {
       from: vi.fn(),
-      where: vi.fn(),
-      limit: selectLimit,
+      where: vi.fn().mockResolvedValue([{
+        id: "candidate-1",
+        extractionResult: {},
+      }]),
     };
     selectQuery.from.mockReturnValue(selectQuery);
-    selectQuery.where.mockReturnValue(selectQuery);
 
     let updateCondition: { getSQL(): unknown } | undefined;
     const returning = vi.fn().mockResolvedValue([{ id: "candidate-1" }]);
@@ -273,10 +273,16 @@ describe("admin read model", () => {
       returning,
     };
     updateQuery.set.mockReturnValue(updateQuery);
-    mocks.getDatabase.mockReturnValue({
-      select: vi.fn().mockReturnValue(selectQuery),
-      update: vi.fn().mockReturnValue(updateQuery),
-    });
+    const transaction = vi.fn(async (operation: (tx: unknown) => unknown) =>
+      operation({
+        select: vi.fn().mockReturnValue(selectQuery),
+        update: vi.fn().mockReturnValue(updateQuery),
+        insert: vi.fn().mockReturnValue({
+          values: vi.fn().mockResolvedValue(undefined),
+        }),
+      })
+    );
+    mocks.getDatabase.mockReturnValue({ transaction });
 
     await expect(
       updateCandidateSnapshot("candidate-1", {
@@ -326,6 +332,9 @@ describe("admin read model", () => {
       operation({
         select: vi.fn().mockReturnValue(selectQuery),
         update: vi.fn().mockReturnValue(updateQuery),
+        insert: vi.fn().mockReturnValue({
+          values: vi.fn().mockResolvedValue(undefined),
+        }),
       })
     );
     mocks.getDatabase.mockReturnValue({ transaction });

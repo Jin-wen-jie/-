@@ -69,12 +69,36 @@ export function toApprovedCandidateRankingView(
     unitCny: totalPrice === null ? "—" : `¥${totalPrice.toFixed(2)}/件`,
     supplyEvidence: evidenceParts.filter(Boolean).join(" · ") || "暂无库存证据",
     availability,
-    confidence: null,
+    confidence: approvedCandidateConfidence({
+      availability,
+      merchantUrl,
+      sourceUrl,
+      observedAt,
+      inventory,
+    }),
     lastVerified: observedAt.toISOString(),
     productUrl: input.productUrl,
     sourceUrl,
     merchantUrl,
   };
+}
+
+function approvedCandidateConfidence(input: {
+  availability: RankingView["availability"];
+  merchantUrl: string | null;
+  sourceUrl: string | null;
+  observedAt: Date;
+  inventory: number | null;
+}): number {
+  let score = 45;
+  if (input.availability === "IN_STOCK") score += 20;
+  if (input.merchantUrl) score += 10;
+  if (input.sourceUrl) score += 5;
+  if (input.inventory !== null && input.inventory > 0) score += 10;
+  const ageMs = Date.now() - input.observedAt.getTime();
+  if (ageMs <= 15 * 60 * 1_000) score += 10;
+  else if (ageMs <= 24 * 60 * 60 * 1_000) score += 5;
+  return Math.max(0, Math.min(100, score));
 }
 
 export function toRankingView(input: RankingViewInput): RankingView {

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { ChevronLeft, ChevronRight, LoaderCircle } from "lucide-react";
+import { ChevronLeft, ChevronRight, LoaderCircle, ShieldCheck } from "lucide-react";
 import { DataTable } from "../../../components/data-table";
 import { ExternalLink } from "../../../components/external-link";
 import { StatusBadge } from "../../../components/status-badge";
@@ -13,6 +13,7 @@ interface Candidate {
   merchantName: string | null; sourceUrl: string | null; merchantUrl: string | null;
   focus: string | null; availability: string | null; evidenceNote: string | null;
   observedAt: string | null; sold: number | null; inventory: number | null;
+  confidence: number; observationCount: number; priceTrendPercent: number | null;
   createdAt: string;
 }
 
@@ -51,6 +52,10 @@ export default function CandidatesClient({
   const [loading, setLoading] = useState(false);
   const [newUrl, setNewUrl] = useState("");
   const [adding, setAdding] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
+  const [batchReviewing, setBatchReviewing] = useState(false);
   const reviewingIdsRef = useRef(new Set<string>());
   const [reviewingIds, setReviewingIds] = useState<ReadonlySet<string>>(
     () => new Set(),
@@ -105,6 +110,7 @@ export default function CandidatesClient({
         throw new Error(data.error ?? "加载失败");
       }
       setCandidates(data.items);
+      setSelectedIds(new Set());
       candidatesRef.current = data.items;
       void synchronizeCandidates(data.items);
       setPage(data.page ?? nextPage);
@@ -179,13 +185,51 @@ export default function CandidatesClient({
     }
   }
 
+  async function handleBatchReview(action: "approve" | "reject") {
+    const ids = [...selectedIds];
+    if (ids.length === 0 || batchReviewing) return;
+    setBatchReviewing(true);
+    setError("");
+    try {
+      const response = await fetch("/api/candidates", {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          "x-csrf-token": readCsrfToken(),
+        },
+        body: JSON.stringify({ ids, action }),
+        signal: AbortSignal.timeout(15_000),
+      });
+      const result = await response.json() as { error?: string };
+      if (!response.ok) throw new Error(result.error ?? "批量审核失败");
+      setSelectedIds(new Set());
+      await fetchCandidates(page);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "批量审核失败");
+    } finally {
+      setBatchReviewing(false);
+    }
+  }
+
+  function toggleCandidate(id: string) {
+    setSelectedIds((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
   const cols: Column<Candidate>[] = [
+    { key: "select", header: "选择", render: (r) => <input type="checkbox" aria-label={`选择 ${r.title ?? "候选商品"}`} checked={selectedIds.has(r.id)} onChange={() => toggleCandidate(r.id)} className="h-4 w-4 accent-blue-600" /> },
     { key: "title", header: "商品", render: (r) => <div><div className="font-semibold text-gray-900">{r.title ?? <span className="italic text-gray-500">待抽取</span>}</div>{r.price && <span className="font-mono text-xs text-gray-600">{r.price}</span>}</div> },
     { key: "merchant", header: "商家", render: (r) => <span className="text-gray-800">{r.merchantName ?? <span className="text-gray-400">—</span>}</span> },
     { key: "focus", header: "关注", render: (r) => r.focus ? <span className="rounded bg-amber-100 px-2 py-1 text-xs font-bold text-amber-900">{r.focus}</span> : <span className="text-gray-400">—</span> },
     { key: "evidence", header: "公开证据", render: (r) => <div className="max-w-xs text-xs text-gray-700"><div>{r.evidenceNote ?? r.availability ?? "待进一步核验"}</div>{(r.sold !== null || r.inventory !== null) && <div className="mt-1 font-mono text-gray-500">已售 {r.sold ?? "—"} · 库存 {r.inventory ?? "—"}</div>}{r.observedAt && <div className="mt-1 text-gray-500">核验：{new Date(r.observedAt).toLocaleString("zh-CN")}</div>}</div> },
     { key: "sourceType", header: "来源", render: (r) => <span className="font-medium text-gray-700">{r.sourceType.toUpperCase()}</span> },
     { key: "status", header: "状态", render: (r) => <StatusBadge status={r.status} /> },
+    { key: "confidence", header: "可信度", render: (r) => <div className="min-w-20"><div className="flex items-center gap-1 text-xs font-semibold text-gray-800"><ShieldCheck className="h-3.5 w-3.5" />{r.confidence}%</div><div className="mt-1 h-1.5 overflow-hidden rounded bg-gray-200"><div className={`h-full ${r.confidence >= 80 ? "bg-green-600" : r.confidence >= 60 ? "bg-amber-500" : "bg-red-500"}`} style={{ width: `${r.confidence}%` }} /></div></div> },
+    { key: "trend", header: "价格趋势", render: (r) => <div className="whitespace-nowrap text-xs"><span className={r.priceTrendPercent === null ? "text-gray-500" : r.priceTrendPercent <= 0 ? "font-semibold text-green-700" : "font-semibold text-red-700"}>{r.priceTrendPercent === null ? "待积累" : `${r.priceTrendPercent > 0 ? "+" : ""}${r.priceTrendPercent}%`}</span><div className="mt-1 text-gray-500">{r.observationCount} 次观察</div></div> },
     { key: "product", header: "商品页", render: (r) => <ExternalLink href={r.productUrl}>商品页</ExternalLink> },
     { key: "source", header: "发现帖", render: (r) => r.sourceUrl ? <ExternalLink href={r.sourceUrl}>来源帖</ExternalLink> : <span className="text-gray-400">手工录入</span> },
     { key: "merchantLink", header: "店铺", render: (r) => r.merchantUrl ? <ExternalLink href={r.merchantUrl}>店铺</ExternalLink> : <span className="text-gray-400">—</span> },
@@ -202,6 +246,7 @@ export default function CandidatesClient({
         </form>
       </div>
       {error && <div className="mb-4 border-l-4 border-red-500 bg-red-50 px-4 py-3 text-sm font-medium text-red-800">{error}</div>}
+      {selectedIds.size > 0 && <div className="mb-3 flex flex-wrap items-center gap-2 border-y border-gray-200 bg-gray-50 px-3 py-2 text-sm"><span className="mr-auto font-medium text-gray-700">已选择 {selectedIds.size} 条</span><button type="button" disabled={batchReviewing} onClick={() => handleBatchReview("approve")} className="rounded bg-green-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-green-700 disabled:opacity-50">批量通过</button><button type="button" disabled={batchReviewing} onClick={() => handleBatchReview("reject")} className="rounded bg-red-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-red-700 disabled:opacity-50">批量驳回</button></div>}
       <div className={loading ? "pointer-events-none opacity-60" : undefined}>
         <DataTable columns={cols} rows={candidates} getRowKey={(r) => r.id} />
       </div>
