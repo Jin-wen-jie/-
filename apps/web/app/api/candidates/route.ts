@@ -16,6 +16,7 @@ import {
 import { databaseFailureCategory } from "../../../lib/database";
 
 const APP_VERSION = process.env.VERCEL_GIT_COMMIT_SHA?.slice(0, 7) ?? "local";
+const focusSchema = z.enum(["Claude Code K12", "K12", "Bug Team", "ALL"]);
 
 const createSchema = z.object({
   productUrl: z
@@ -44,11 +45,13 @@ const batchReviewSchema = z.object({
 
 export async function GET(request: Request) {
   const searchParams = new URL(request.url).searchParams;
+  const focus = focusSchema.catch("ALL").parse(searchParams.get("focus") ?? "ALL");
   try {
     return NextResponse.json(
       await listCandidates({
         page: Number(searchParams.get("page") ?? 1),
         pageSize: Number(searchParams.get("pageSize") ?? 50),
+        focus,
       }),
       { headers: { "x-app-version": APP_VERSION } },
     );

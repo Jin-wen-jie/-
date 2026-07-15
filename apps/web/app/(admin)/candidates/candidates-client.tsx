@@ -14,6 +14,9 @@ interface Candidate {
   focus: string | null; availability: string | null; evidenceNote: string | null;
   observedAt: string | null; sold: number | null; inventory: number | null;
   confidence: number; observationCount: number; priceTrendPercent: number | null;
+  claudePlan: string | null; deliveryType: string | null;
+  claudeCodeEvidence: string | null; kycStatus: string | null;
+  warrantyEvidence: string | null;
   createdAt: string;
 }
 
@@ -23,6 +26,8 @@ interface CandidatePage {
   pageSize: number;
   total: number;
 }
+
+type CandidateFocusFilter = "Claude Code K12" | "K12" | "Bug Team" | "ALL";
 
 const PRICE_SYNC_INTERVAL_MS = 5 * 60 * 1_000;
 const PRICE_SYNC_CONCURRENCY = 4;
@@ -41,9 +46,11 @@ function readCsrfToken(): string {
 export default function CandidatesClient({
   initialPage,
   initialError = "",
+  initialFocus,
 }: {
   initialPage: CandidatePage;
   initialError?: string;
+  initialFocus: CandidateFocusFilter;
 }) {
   const [candidates, setCandidates] = useState(initialPage.items);
   const [page, setPage] = useState(initialPage.page);
@@ -56,6 +63,7 @@ export default function CandidatesClient({
     () => new Set(),
   );
   const [batchReviewing, setBatchReviewing] = useState(false);
+  const [focus, setFocus] = useState<CandidateFocusFilter>(initialFocus);
   const reviewingIdsRef = useRef(new Set<string>());
   const [reviewingIds, setReviewingIds] = useState<ReadonlySet<string>>(
     () => new Set(),
@@ -96,11 +104,14 @@ export default function CandidatesClient({
     }
   }
 
-  async function fetchCandidates(nextPage = page) {
+  async function fetchCandidates(
+    nextPage = page,
+    nextFocus: CandidateFocusFilter = focus,
+  ) {
     setLoading(true);
     try {
       const res = await fetch(
-        `/api/candidates?page=${nextPage}&pageSize=${pageSize}`,
+        `/api/candidates?page=${nextPage}&pageSize=${pageSize}&focus=${encodeURIComponent(nextFocus)}`,
         { signal: AbortSignal.timeout(15_000) },
       );
       const data = (await res.json()) as Partial<CandidatePage> & {
@@ -114,6 +125,7 @@ export default function CandidatesClient({
       candidatesRef.current = data.items;
       void synchronizeCandidates(data.items);
       setPage(data.page ?? nextPage);
+      setFocus(nextFocus);
       setTotal(data.total ?? 0);
       setError("");
     } catch (cause) {
@@ -225,7 +237,7 @@ export default function CandidatesClient({
     { key: "title", header: "商品", render: (r) => <div><div className="font-semibold text-gray-900">{r.title ?? <span className="italic text-gray-500">待抽取</span>}</div>{r.price && <span className="font-mono text-xs text-gray-600">{r.price}</span>}</div> },
     { key: "merchant", header: "商家", render: (r) => <span className="text-gray-800">{r.merchantName ?? <span className="text-gray-400">—</span>}</span> },
     { key: "focus", header: "关注", render: (r) => r.focus ? <span className="rounded bg-amber-100 px-2 py-1 text-xs font-bold text-amber-900">{r.focus}</span> : <span className="text-gray-400">—</span> },
-    { key: "evidence", header: "公开证据", render: (r) => <div className="max-w-xs text-xs text-gray-700"><div>{r.evidenceNote ?? r.availability ?? "待进一步核验"}</div>{(r.sold !== null || r.inventory !== null) && <div className="mt-1 font-mono text-gray-500">已售 {r.sold ?? "—"} · 库存 {r.inventory ?? "—"}</div>}{r.observedAt && <div className="mt-1 text-gray-500">核验：{formatChinaTime(r.observedAt)}</div>}</div> },
+    { key: "evidence", header: "公开证据", render: (r) => <div className="max-w-xs text-xs text-gray-700">{r.claudePlan && <><div className="mb-1 font-semibold text-cyan-800">{r.claudePlan} · {r.deliveryType === "account" ? "成品账号" : r.deliveryType === "recharge" ? "充值/CDK" : "待确认交付"}</div><div className="mb-1 text-gray-500">{r.claudeCodeEvidence === "explicit-title" ? "标题明确支持 Code" : "套餐兼容 Code"} · {r.kycStatus === "verified" ? "已过 KYC" : r.kycStatus === "mentioned" ? "提及 KYC" : "KYC 未知"} · {r.warrantyEvidence === "offered" ? "有质保" : r.warrantyEvidence === "none" ? "无质保" : "质保未知"}</div></>}<div>{r.evidenceNote ?? r.availability ?? "待进一步核验"}</div>{(r.sold !== null || r.inventory !== null) && <div className="mt-1 font-mono text-gray-500">已售 {r.sold ?? "—"} · 库存 {r.inventory ?? "—"}</div>}{r.observedAt && <div className="mt-1 text-gray-500">核验：{formatChinaTime(r.observedAt)}</div>}</div> },
     { key: "sourceType", header: "来源", render: (r) => <span className="font-medium text-gray-700">{r.sourceType.toUpperCase()}</span> },
     { key: "status", header: "状态", render: (r) => <StatusBadge status={r.status} /> },
     { key: "confidence", header: "可信度", render: (r) => <div className="min-w-20"><div className="flex items-center gap-1 text-xs font-semibold text-gray-800"><ShieldCheck className="h-3.5 w-3.5" />{r.confidence}%</div><div className="mt-1 h-1.5 overflow-hidden rounded bg-gray-200"><div className={`h-full ${r.confidence >= 80 ? "bg-green-600" : r.confidence >= 60 ? "bg-amber-500" : "bg-red-500"}`} style={{ width: `${r.confidence}%` }} /></div></div> },
@@ -239,7 +251,7 @@ export default function CandidatesClient({
   return (
     <div>
       <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <h2 className="text-xl font-bold text-gray-900">K12 / Bug Team 候选审核</h2>
+        <h2 className="text-xl font-bold text-gray-900">Claude Code / GPT 候选审核</h2>
         <form onSubmit={handleAdd} className="flex min-w-0 gap-2 sm:max-w-lg sm:flex-1 sm:justify-end">
           <input type="url" className="min-w-0 flex-1 rounded border border-gray-300 px-3 py-1.5 text-sm text-gray-900 placeholder-gray-400 focus:border-blue-500 focus:outline-none sm:max-w-sm" placeholder="输入商品 URL 手工补链" value={newUrl} onChange={(e) => setNewUrl(e.target.value)} />
           <button type="submit" disabled={adding || !newUrl} className="rounded bg-blue-600 px-4 py-1.5 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-40">添加</button>
@@ -249,6 +261,14 @@ export default function CandidatesClient({
       {selectedIds.size > 0 && <div className="mb-3 flex flex-wrap items-center gap-2 border-y border-gray-200 bg-gray-50 px-3 py-2 text-sm"><span className="mr-auto font-medium text-gray-700">已选择 {selectedIds.size} 条</span><button type="button" disabled={batchReviewing} onClick={() => handleBatchReview("approve")} className="rounded bg-green-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-green-700 disabled:opacity-50">批量通过</button><button type="button" disabled={batchReviewing} onClick={() => handleBatchReview("reject")} className="rounded bg-red-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-red-700 disabled:opacity-50">批量驳回</button></div>}
       <div className={loading ? "pointer-events-none opacity-60" : undefined}>
         <DataTable columns={cols} rows={candidates} getRowKey={(r) => r.id} />
+      </div>
+      <div className="mb-4 flex flex-wrap gap-1 border-b border-gray-200">
+        {([
+          ["Claude Code K12", "Claude Code K12"],
+          ["K12", "GPT K12"],
+          ["Bug Team", "Bug Team"],
+          ["ALL", "全部"],
+        ] as const).map(([value, label]) => <button key={value} type="button" onClick={() => fetchCandidates(1, value)} className={`border-b-2 px-3 py-2 text-sm font-semibold ${focus === value ? "border-blue-600 text-blue-700" : "border-transparent text-gray-600 hover:text-gray-900"}`}>{label}</button>)}
       </div>
       <div className="mt-3 flex min-h-9 items-center justify-between gap-3 text-xs text-gray-600">
         <span>第 {page} / {totalPages} 页，共 {total} 条</span>

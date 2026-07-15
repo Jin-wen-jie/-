@@ -30,7 +30,7 @@ export type Transaction = Parameters<
 >[0];
 
 export * from "./schema.js";
-export { and, asc, eq, inArray, lt, or } from "drizzle-orm";
+export { and, asc, eq, inArray, lt, notInArray, or, sql } from "drizzle-orm";
 export {
   bootstrapAdmin,
   hashPassword,

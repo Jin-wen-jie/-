@@ -13,7 +13,9 @@ import {
   listingObservations,
   listings,
   lt,
+  notInArray,
   or,
+  sql,
   watchSources,
   type Db,
   type Transaction,
@@ -355,6 +357,12 @@ export function createWorkerRepositoryFromDb(
           )
         );
       }
+      const claudeEngine = result.engines.find(
+        (engine) => engine.engine === "priceai-claude",
+      );
+      if (claudeEngine?.status === "ACTIVE") {
+        await synchronizeClaudeTopMerchants(db, candidates, observedAt);
+      }
 
       const status = publicSearchStatus(result);
       const failedEngines = result.engines.filter(
@@ -420,6 +428,8 @@ async function savePublicSearchCandidates(
       .select({
         id: discoveryCandidates.id,
         extractionResult: discoveryCandidates.extractionResult,
+        status: discoveryCandidates.status,
+        rejectionReason: discoveryCandidates.rejectionReason,
       })
       .from(discoveryCandidates)
       .where(eq(discoveryCandidates.urlFingerprint, fingerprint))
@@ -459,17 +469,28 @@ async function savePublicSearchCandidates(
         discoveredAt: observedAt,
       });
       inserted++;
-    } else if (!change.anomalous && previous) {
-      await tx
-        .update(discoveryCandidates)
-        .set({
-          extractionResult: {
-            ...previousExtraction,
-            ...nextExtraction,
-          },
-          updatedAt: observedAt,
-        })
-        .where(eq(discoveryCandidates.id, previous.id));
+    } else if (previous) {
+      const revive = previous.status === "REJECTED" &&
+        previous.rejectionReason === "CLAUDE_NOT_TOP_20";
+      if (!change.anomalous || revive) {
+        await tx
+          .update(discoveryCandidates)
+          .set({
+            ...(!change.anomalous
+              ? {
+                extractionResult: {
+                  ...previousExtraction,
+                  ...nextExtraction,
+                },
+              }
+              : {}),
+            updatedAt: observedAt,
+            ...(revive
+              ? { status: "DISCOVERED" as const, rejectionReason: null }
+              : {}),
+          })
+          .where(eq(discoveryCandidates.id, previous.id));
+      }
     }
 
     await tx.insert(candidateObservations).values({
@@ -500,6 +521,35 @@ async function savePublicSearchCandidates(
     }
   }
   return inserted;
+}
+
+async function synchronizeClaudeTopMerchants(
+  db: Db,
+  candidates: PublicSearchCandidate[],
+  observedAt: Date,
+): Promise<void> {
+  const fingerprints = candidates
+    .filter((candidate) => candidate.focus === "Claude Code K12")
+    .map((candidate) => fingerprintUrl(canonicalizeUrl(candidate.url)));
+  if (fingerprints.length === 0) return;
+  await db
+    .update(discoveryCandidates)
+    .set({
+      status: "REJECTED",
+      rejectionReason: "CLAUDE_NOT_TOP_20",
+      updatedAt: observedAt,
+    })
+    .where(
+      and(
+        inArray(discoveryCandidates.status, [
+          "DISCOVERED",
+          "REVIEW_REQUIRED",
+          "RETRY_WAIT",
+        ]),
+        sql`${discoveryCandidates.extractionResult} ->> 'focus' = ${"Claude Code K12"}`,
+        notInArray(discoveryCandidates.urlFingerprint, fingerprints),
+      ),
+    );
 }
 
 function positiveNumber(value: unknown): number | null {

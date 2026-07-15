@@ -166,6 +166,10 @@ describe("public web discovery", () => {
       </channel></rss>`;
     const request = async (input: Parameters<typeof fetch>[0]) => {
       const url = new URL(String(input));
+      if (
+        url.hostname === "priceai.cc" &&
+        url.pathname.startsWith("/api/products/claude-")
+      ) return Response.json({ total: 0, limited: false, offers: [] });
       return url.hostname === "priceai.cc"
         ? new Response(priceAiPage())
         : new Response(rss, {
@@ -179,8 +183,14 @@ describe("public web discovery", () => {
       request as typeof fetch,
     );
 
-    expect(DEFAULT_PUBLIC_SEARCH_QUERIES).toHaveLength(4);
+    expect(DEFAULT_PUBLIC_SEARCH_QUERIES).toHaveLength(6);
     expect(result.engines).toEqual([
+      {
+        engine: "priceai-claude",
+        status: "ACTIVE",
+        resultCount: 0,
+        errorCategory: null,
+      },
       {
         engine: "priceai",
         status: "ACTIVE",
@@ -190,7 +200,7 @@ describe("public web discovery", () => {
       {
         engine: "bing-rss",
         status: "ACTIVE",
-        resultCount: 16,
+        resultCount: 24,
         errorCategory: null,
       },
     ]);
@@ -214,6 +224,9 @@ describe("public web discovery", () => {
       const url = new URL(String(input));
       if (url.hostname === "priceai.cc") {
         if (url.pathname.startsWith("/api/")) {
+          if (!url.pathname.includes("chatgpt-team-business")) {
+            return Response.json({ total: 0, limited: false, offers: [] });
+          }
           const offset = url.searchParams.get("offset") ?? "0";
           requestedOffsets.push(offset);
           return Response.json({
@@ -295,6 +308,12 @@ describe("public web discovery", () => {
       }),
     ]);
     expect(result.engines[0]).toEqual({
+      engine: "priceai-claude",
+      status: "ACTIVE",
+      resultCount: 0,
+      errorCategory: null,
+    });
+    expect(result.engines[1]).toEqual({
       engine: "priceai",
       status: "ACTIVE",
       resultCount: 2,
@@ -302,10 +321,90 @@ describe("public web discovery", () => {
     });
   });
 
+  it("keeps the cheapest offer from each of the lowest 20 Claude merchants", async () => {
+    const slugs = [
+      "claude-account",
+      "claude-pro-month",
+      "claude-max-5x",
+      "claude-max-20x",
+      "claude-team-standard",
+      "claude-team-premium",
+    ];
+    const request = async (input: Parameters<typeof fetch>[0]) => {
+      const url = new URL(String(input));
+      if (url.hostname === "priceai.cc" && url.pathname.startsWith("/api/")) {
+        if (url.pathname.includes("chatgpt-team-business")) {
+          return Response.json({ total: 0, limited: false, offers: [] });
+        }
+        const slug = slugs.find((value) => url.pathname.includes(value));
+        if (!slug) return Response.json({ total: 0, limited: false, offers: [] });
+        const group = slugs.indexOf(slug);
+        const offers = Array.from({ length: 5 }, (_, index) => {
+          const merchantNumber = group * 5 + index + 1;
+          return {
+            url: `https://shop.example/item/claude-${merchantNumber}`,
+            sourceTitle: `Claude Code ${slug} account`,
+            sourceStoreName: `merchant-${merchantNumber}`,
+            price: merchantNumber,
+            currency: "CNY",
+            status: "in_stock",
+            stockCount: 3,
+            filterTags: ["delivery_account"],
+          };
+        });
+        if (slug === "claude-max-20x") {
+          offers.push({
+            url: "https://shop.example/item/claude-merchant-1-cheaper",
+            sourceTitle: "Claude Code Max 20x account",
+            sourceStoreName: "merchant-1",
+            price: 0.5,
+            currency: "CNY",
+            status: "in_stock",
+            stockCount: 2,
+            filterTags: ["delivery_account"],
+          });
+        }
+        return Response.json({ total: offers.length, limited: false, offers });
+      }
+      if (url.hostname === "priceai.cc") return new Response(priceAiPage());
+      return new Response(
+        "<rss><channel><title>empty</title></channel></rss>",
+        { status: 200 },
+      );
+    };
+
+    const result = await discoverPublicWeb(
+      { maxResults: 100 },
+      request as typeof fetch,
+    );
+    const claude = result.candidates.filter(
+      (candidate) => candidate.focus === "Claude Code K12",
+    );
+    expect(claude).toHaveLength(20);
+    expect(
+      new Set(claude.map((candidate) => candidate.metadata?.merchantKey)).size,
+    ).toBe(20);
+    expect(claude.map((candidate) => candidate.metadata?.price)).toEqual([
+      0.5,
+      ...Array.from({ length: 19 }, (_, index) => index + 2),
+    ]);
+    expect(claude[0]).toMatchObject({
+      engine: "priceai-claude",
+      metadata: {
+        merchantName: "merchant-1",
+        claudePlan: "Max 20x",
+        deliveryType: "account",
+      },
+    });
+  });
+
   it("isolates optional search engine failures", async () => {
     const request = async (input: Parameters<typeof fetch>[0]) => {
       const url = new URL(String(input));
       if (url.hostname === "priceai.cc") {
+        if (url.pathname.startsWith("/api/products/claude-")) {
+          return Response.json({ total: 0, limited: false, offers: [] });
+        }
         return new Response(priceAiPage());
       }
       if (url.hostname === "www.bing.com") {
@@ -342,6 +441,7 @@ describe("public web discovery", () => {
 
     expect(result.candidates).toHaveLength(1);
     expect(result.engines).toEqual([
+      expect.objectContaining({ engine: "priceai-claude", status: "ACTIVE" }),
       expect.objectContaining({ engine: "priceai", status: "ACTIVE" }),
       expect.objectContaining({ engine: "bing-rss", status: "ACTIVE" }),
       expect.objectContaining({ engine: "brave", status: "RATE_LIMITED" }),

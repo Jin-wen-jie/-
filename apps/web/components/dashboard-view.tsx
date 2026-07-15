@@ -132,9 +132,9 @@ export function DashboardView({
       data-client-refresh-updated={refreshDiagnostic.updated}
       data-client-refresh-failures={refreshDiagnostic.failures}
     >
-      <h2 className="mb-1 text-xl font-bold text-gray-900">K12 / Bug Team 比价总览</h2>
+      <h2 className="mb-1 text-xl font-bold text-gray-900">Claude Code / GPT 比价总览</h2>
       <p className="mb-4 text-xs text-gray-500">
-        PostgreSQL 事实数据：{counts.candidates} 条候选 · {counts.merchants} 个保留商家 · {counts.listings} 条已通过商品。总览直接展示候选审核中点击“通过”的 K12 / Bug Team 商品。
+        PostgreSQL 事实数据：{counts.candidates} 条候选 · {counts.merchants} 个保留商家 · {counts.listings} 条已通过商品。Claude Code K12 仅保留实时最低价的 20 个不同商家。
       </p>
       <div className="mb-4 flex gap-2 border-b">
         <button onClick={() => setTab("price")} className={`border-b-2 px-4 py-2 text-sm font-semibold transition-colors ${tab === "price" ? "border-blue-600 text-blue-700" : "border-transparent text-gray-600 hover:text-gray-900"}`}>价格榜</button>

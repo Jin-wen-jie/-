@@ -101,9 +101,9 @@ export default async function JobsPage() {
     <div>
       <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h2 className="text-xl font-bold text-gray-900">K12 / Bug Team 采集任务</h2>
+          <h2 className="text-xl font-bold text-gray-900">Claude Code / GPT 采集任务</h2>
           <p className="mt-0.5 text-xs text-gray-500">
-            多搜索引擎只调查公开的 K12 与 Bug Team 商品网页；新链接去重、验证后进入人工审核。
+            Claude Code 按商家去重并只保留实时最低价 20 家；GPT K12 与 Bug Team 继续独立采集。
           </p>
         </div>
         <ManualUrlForm />

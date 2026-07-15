@@ -55,7 +55,7 @@ export function AdminShell({
     <div className="min-h-screen bg-gray-100 md:flex md:h-screen">
       <aside className="border-b border-gray-200 bg-white md:flex md:w-56 md:shrink-0 md:flex-col md:border-r md:border-b-0">
         <div className="border-b border-gray-200 px-4 py-3 md:px-5 md:py-4">
-          <h1 className="text-base font-bold text-gray-900">K12 / Bug Team</h1>
+          <h1 className="text-base font-bold text-gray-900">Claude Code / GPT</h1>
           <p className="text-xs text-gray-500 mt-0.5">教育 AI 商品调查后台</p>
         </div>
         <nav className="flex gap-1 overflow-x-auto p-2 md:block md:flex-1 md:overflow-y-auto">

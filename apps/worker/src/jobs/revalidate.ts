@@ -6,6 +6,7 @@ import type { ValidatorResponse } from "../validator-client.js";
 import { XMLParser } from "fast-xml-parser";
 import { z } from "zod";
 import {
+  PRICEAI_CLAUDE_PRODUCTS,
   parsePriceAiApiPage,
   parsePriceAiPage,
   PRICEAI_TEAM_BUSINESS_URL,
@@ -14,6 +15,9 @@ import {
 
 const PRICEAI_PAGE_SIZE = 200;
 const MAX_PRICEAI_OFFERS = 500;
+const CLAUDE_MERCHANT_LIMIT = 20;
+
+export type ProductFocus = "K12" | "Bug Team" | "Claude Code K12";
 
 export interface JobContext {
   baseUrl: string;
@@ -89,6 +93,7 @@ export async function discoverSource(
 }
 
 export type PublicSearchEngine =
+  | "priceai-claude"
   | "priceai"
   | "bing-rss"
   | "brave"
@@ -113,7 +118,7 @@ export interface PublicSearchCandidate {
   title: string;
   snippet: string;
   engine: PublicSearchEngine;
-  focus: "K12" | "Bug Team";
+  focus: ProductFocus;
   sourceUrl?: string;
   metadata?: {
     price?: number;
@@ -122,6 +127,12 @@ export interface PublicSearchCandidate {
     merchantName?: string;
     availability?: "IN_STOCK" | "OUT_OF_STOCK" | "UNKNOWN";
     observedAt?: string;
+    claudePlan?: string;
+    deliveryType?: string;
+    merchantKey?: string;
+    claudeCodeEvidence?: string;
+    kycStatus?: string;
+    warrantyEvidence?: string;
   };
 }
 
@@ -143,6 +154,7 @@ interface SearchHit {
   snippet: string;
   sourceUrl?: string;
   metadata?: PublicSearchCandidate["metadata"];
+  focus?: ProductFocus;
 }
 
 interface SearchProvider {
@@ -152,6 +164,8 @@ interface SearchProvider {
 }
 
 export const DEFAULT_PUBLIC_SEARCH_QUERIES = [
+  '"Claude Code" (K12 OR 教育 OR 学生 OR account OR 成品号)',
+  'site:pay.ldxp.cn/item "Claude Code" (账号 OR 成品号 OR Max OR Pro)',
   '"GPT Team K12" (商品 OR 成品 OR 账号 OR account)',
   '"Bug Team" ChatGPT (商品 OR 成品 OR 账号 OR account)',
   'site:pay.ldxp.cn/item ("K12" OR "Bug Team")',
@@ -206,6 +220,10 @@ export async function discoverPublicWeb(
     for (const hit of run.hits) {
       const candidate = toPublicSearchCandidate(hit, run.summary.engine);
       if (!candidate || seen.has(candidate.url)) continue;
+      if (
+        candidate.focus === "Claude Code K12" &&
+        candidate.engine !== "priceai-claude"
+      ) continue;
       seen.add(candidate.url);
       candidates.push(candidate);
       if (candidates.length >= config.maxResults) break;
@@ -224,6 +242,11 @@ function createSearchProviders(
   request: typeof fetch,
 ): SearchProvider[] {
   const providers: SearchProvider[] = [
+    {
+      name: "priceai-claude",
+      queries: ["claude-code-lowest-merchants"],
+      search: () => searchPriceAiClaude(request),
+    },
     {
       name: "priceai",
       queries: [PRICEAI_TEAM_BUSINESS_URL],
@@ -355,8 +378,92 @@ async function searchPriceAi(request: typeof fetch): Promise<SearchHit[]> {
   });
 }
 
+async function searchPriceAiClaude(request: typeof fetch): Promise<SearchHit[]> {
+  const outcomes = await Promise.allSettled(
+    PRICEAI_CLAUDE_PRODUCTS.map(async (product) => ({
+      product,
+      offers: await fetchPriceAiProductOffers(
+        request,
+        new URL(`https://priceai.cc/products/${product.slug}`),
+      ),
+    })),
+  );
+  const productOffers = outcomes.flatMap((outcome) =>
+    outcome.status === "fulfilled" ? [outcome.value] : []
+  );
+  if (productOffers.length === 0) {
+    const failure = outcomes.find((outcome) => outcome.status === "rejected");
+    throw failure?.status === "rejected"
+      ? failure.reason
+      : new SearchProviderError("SEARCH_FAILED");
+  }
+  const cheapestByMerchant = new Map<string, SearchHit>();
+
+  for (const { product, offers } of productOffers) {
+    for (const offer of offers) {
+      if (!isReviewableClaudeOffer(offer, product.slug)) continue;
+      const merchantName = offer.sourceStoreName ?? offer.sourceName ??
+        new URL(offer.url).hostname;
+      const merchantKey = normalizeMerchantKey(merchantName);
+      const hit: SearchHit = {
+        url: offer.url,
+        title: offer.sourceTitle,
+        snippet: [
+          "Claude Code K12",
+          product.plan,
+          merchantName,
+          `价格 ${offer.price} ${offer.currency ?? "CNY"}`,
+          offer.stockCount === null || offer.stockCount === undefined
+            ? null
+            : `库存 ${offer.stockCount}`,
+          ...offer.filterTags,
+        ].filter(Boolean).join(" · "),
+        sourceUrl: `https://priceai.cc/products/${product.slug}`,
+        focus: "Claude Code K12",
+        metadata: {
+          price: offer.price!,
+          currency: offer.currency ?? "CNY",
+          ...(offer.stockCount === null || offer.stockCount === undefined
+            ? {}
+            : { inventory: offer.stockCount }),
+          merchantName,
+          merchantKey,
+          availability: priceAiAvailability(offer),
+          claudePlan: product.plan,
+          deliveryType: claudeDeliveryType(offer),
+          claudeCodeEvidence: /claude\s*code/i.test(offer.sourceTitle)
+            ? "explicit-title"
+            : "plan-compatible",
+          kycStatus: claudeKycStatus(offer.sourceTitle),
+          warrantyEvidence: claudeWarrantyEvidence(offer.sourceTitle),
+          ...(offer.verifiedAt ?? offer.capturedAt
+            ? { observedAt: offer.verifiedAt ?? offer.capturedAt! }
+            : {}),
+        },
+      };
+      const previous = cheapestByMerchant.get(merchantKey);
+      if (!previous || hitPrice(hit) < hitPrice(previous)) {
+        cheapestByMerchant.set(merchantKey, hit);
+      }
+    }
+  }
+
+  return [...cheapestByMerchant.values()]
+    .sort((left, right) =>
+      hitPrice(left) - hitPrice(right) || left.url.localeCompare(right.url)
+    )
+    .slice(0, CLAUDE_MERCHANT_LIMIT);
+}
+
 async function fetchPriceAiOffers(
   request: typeof fetch,
+): Promise<PriceAiOffer[]> {
+  return fetchPriceAiProductOffers(request, new URL(PRICEAI_TEAM_BUSINESS_URL));
+}
+
+async function fetchPriceAiProductOffers(
+  request: typeof fetch,
+  productUrl: URL,
 ): Promise<PriceAiOffer[]> {
   const offers: PriceAiOffer[] = [];
   let total = PRICEAI_PAGE_SIZE;
@@ -367,8 +474,8 @@ async function fetchPriceAiOffers(
     offset += PRICEAI_PAGE_SIZE
   ) {
     const url = new URL(
-      "/api/products/chatgpt-team-business/offers",
-      PRICEAI_TEAM_BUSINESS_URL,
+      `/api${productUrl.pathname}/offers`,
+      productUrl,
     );
     url.searchParams.set("limit", String(PRICEAI_PAGE_SIZE));
     url.searchParams.set("offset", String(offset));
@@ -386,6 +493,45 @@ async function fetchPriceAiOffers(
   return offers;
 }
 
+function isReviewableClaudeOffer(
+  offer: PriceAiOffer,
+  productSlug: string,
+): boolean {
+  if (
+    priceAiAvailability(offer) !== "IN_STOCK" ||
+    typeof offer.price !== "number" ||
+    offer.price <= 0
+  ) return false;
+  if (productSlug !== "claude-account") return true;
+  return /claude\s*code/i.test(offer.sourceTitle);
+}
+
+function claudeDeliveryType(offer: PriceAiOffer): string {
+  if (offer.filterTags.includes("delivery_account")) return "account";
+  if (offer.filterTags.includes("delivery_recharge")) return "recharge";
+  return "unknown";
+}
+
+function claudeKycStatus(title: string): string {
+  if (/已过\s*kyc|kyc\s*(?:verified|通过)/i.test(title)) return "verified";
+  if (/kyc/i.test(title)) return "mentioned";
+  return "unknown";
+}
+
+function claudeWarrantyEvidence(title: string): string {
+  if (/无质保|不质保|no\s*warranty/i.test(title)) return "none";
+  if (/质保|warranty/i.test(title)) return "offered";
+  return "unknown";
+}
+
+function normalizeMerchantKey(value: string): string {
+  return value.trim().toLocaleLowerCase("zh-CN").replace(/\s+/g, " ");
+}
+
+function hitPrice(hit: SearchHit): number {
+  return hit.metadata?.price ?? Number.POSITIVE_INFINITY;
+}
+
 function isReviewablePriceAiOffer(offer: PriceAiOffer): boolean {
   if (priceAiAvailability(offer) !== "IN_STOCK") return false;
   if (offer.filterTags.includes("team_bug")) return true;
@@ -399,6 +545,9 @@ function priceAiAvailability(
   offer: PriceAiOffer,
 ): "IN_STOCK" | "OUT_OF_STOCK" | "UNKNOWN" {
   if (offer.stockCount === 0) return "OUT_OF_STOCK";
+  if (typeof offer.stockCount === "number" && offer.stockCount > 0) {
+    return "IN_STOCK";
+  }
   const status = `${offer.effectiveStatus ?? ""} ${offer.status ?? ""}`;
   if (/out[_ -]?of[_ -]?stock|unavailable|sold[_ -]?out/i.test(status)) {
     return "OUT_OF_STOCK";
@@ -549,7 +698,7 @@ function toPublicSearchCandidate(
     return null;
   }
   const evidence = `${hit.title} ${hit.snippet} ${decodeURIComponentSafe(url.pathname)}`;
-  const focus = inferFocus(evidence);
+  const focus = hit.focus ?? inferFocus(evidence);
   if (!focus || !looksLikeProduct(evidence, url.pathname)) return null;
 
   url.hash = "";
@@ -569,7 +718,8 @@ function toPublicSearchCandidate(
   };
 }
 
-function inferFocus(evidence: string): "K12" | "Bug Team" | null {
+function inferFocus(evidence: string): ProductFocus | null {
+  if (/claude\s*code/i.test(evidence)) return "Claude Code K12";
   if (/\bbug\s*team\b|\bbugteam\b/i.test(evidence)) return "Bug Team";
   if (/\bk[\s-]?12\b/i.test(evidence)) return "K12";
   return null;

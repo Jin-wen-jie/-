@@ -23,9 +23,16 @@ export interface CandidatePage {
   total: number;
 }
 
+export type CandidateFocusFilter =
+  | "Claude Code K12"
+  | "K12"
+  | "Bug Team"
+  | "ALL";
+
 export async function listCandidates(options: {
   page?: number;
   pageSize?: number;
+  focus?: CandidateFocusFilter;
 } = {}): Promise<CandidatePage> {
   return withDatabaseRetry(() => listCandidatesOnce(options));
 }
@@ -33,6 +40,7 @@ export async function listCandidates(options: {
 async function listCandidatesOnce(options: {
   page?: number;
   pageSize?: number;
+  focus?: CandidateFocusFilter;
 }): Promise<CandidatePage> {
   const db = getDatabase();
   const requestedPage = options.page ?? 1;
@@ -43,6 +51,7 @@ async function listCandidatesOnce(options: {
   const pageSize = Number.isFinite(requestedPageSize)
     ? Math.min(100, Math.max(1, Math.floor(requestedPageSize)))
     : 50;
+  const focusFilter = options.focus ?? "ALL";
   const focus = sql<string | null>`${discoveryCandidates.extractionResult} ->> 'focus'`;
   const totalPriceText = sql<string | null>`${discoveryCandidates.extractionResult} ->> 'totalPrice'`;
   const priceText = sql<string | null>`${discoveryCandidates.extractionResult} ->> 'price'`;
@@ -52,6 +61,10 @@ async function listCandidatesOnce(options: {
     case when ${priceText} ~ '^[0-9]+([.][0-9]+)?$'
       then nullif((${priceText})::numeric, 0) end
   )`;
+  const focusOrder = sql`case when ${focus} = 'Claude Code K12' then 0 when ${focus} in ('K12', 'Bug Team') then 1 else 2 end`;
+  const orderBy = focusFilter === "Claude Code K12"
+    ? [sql`${effectivePrice} asc nulls last`, focusOrder, desc(discoveryCandidates.createdAt)]
+    : [focusOrder, desc(discoveryCandidates.createdAt)];
   const rows = await db
     .select({
       id: discoveryCandidates.id,
@@ -96,20 +109,18 @@ async function listCandidatesOnce(options: {
           "DISCOVERED",
           "REVIEW_REQUIRED",
         ]),
-        sql`(${focus} is null or ${focus} in ('K12', 'Bug Team'))`,
+        sql`(${focus} is null or ${focus} in ('Claude Code K12', 'K12', 'Bug Team'))`,
+        focusFilter === "ALL" ? undefined : sql`${focus} = ${focusFilter}`,
         sql`(${focus} is distinct from 'K12' or ${effectivePrice} is null or ${effectivePrice} <= ${1.2})`,
         sql`${discoveryCandidates.productUrl} !~* ${"/(login|sign-in|signin|auth)(/|[?#]|$)"}`,
       ),
     )
-    .orderBy(
-      sql`case when ${focus} in ('K12', 'Bug Team') then 0 else 1 end`,
-      desc(discoveryCandidates.createdAt),
-    )
+    .orderBy(...orderBy)
     .limit(pageSize)
     .offset((page - 1) * pageSize);
 
   if (rows.length === 0 && page > 1) {
-    return listCandidatesOnce({ page: 1, pageSize });
+    return listCandidatesOnce({ page: 1, pageSize, focus: focusFilter });
   }
 
   return {

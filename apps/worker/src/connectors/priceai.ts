@@ -4,6 +4,15 @@ import { z } from "zod";
 export const PRICEAI_TEAM_BUSINESS_URL =
   "https://priceai.cc/products/chatgpt-team-business";
 
+export const PRICEAI_CLAUDE_PRODUCTS = [
+  { slug: "claude-account", plan: "Account" },
+  { slug: "claude-pro-month", plan: "Pro" },
+  { slug: "claude-max-5x", plan: "Max 5x" },
+  { slug: "claude-max-20x", plan: "Max 20x" },
+  { slug: "claude-team-standard", plan: "Team Standard" },
+  { slug: "claude-team-premium", plan: "Team Premium" },
+] as const;
+
 const MAX_PRICEAI_HTML_BYTES = 5 * 1024 * 1024;
 
 const offerSchema = z.object({

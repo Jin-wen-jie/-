@@ -14,6 +14,11 @@ const extractionSchema = z
     observedAt: z.string().min(1).optional(),
     sold: z.number().nonnegative().optional(),
     inventory: z.number().nonnegative().optional(),
+    claudePlan: z.string().min(1).optional(),
+    deliveryType: z.string().min(1).optional(),
+    claudeCodeEvidence: z.string().min(1).optional(),
+    kycStatus: z.string().min(1).optional(),
+    warrantyEvidence: z.string().min(1).optional(),
   })
   .passthrough();
 
@@ -48,6 +53,11 @@ export interface CandidateView {
   observedAt: string | null;
   sold: number | null;
   inventory: number | null;
+  claudePlan: string | null;
+  deliveryType: string | null;
+  claudeCodeEvidence: string | null;
+  kycStatus: string | null;
+  warrantyEvidence: string | null;
   canApprove: boolean;
   confidence: number;
   observationCount: number;
@@ -98,6 +108,11 @@ export function toCandidateView(input: CandidateViewInput): CandidateView {
     observedAt: data.observedAt ?? null,
     sold: data.sold ?? null,
     inventory: data.inventory ?? null,
+    claudePlan: data.claudePlan ?? null,
+    deliveryType: data.deliveryType ?? null,
+    claudeCodeEvidence: data.claudeCodeEvidence ?? null,
+    kycStatus: data.kycStatus ?? null,
+    warrantyEvidence: data.warrantyEvidence ?? null,
     canApprove: Boolean(input.comparisonKey && input.specId),
     confidence: candidateConfidence({
       availability: data.availability,
