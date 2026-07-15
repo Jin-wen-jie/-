@@ -14,7 +14,7 @@ import {
 } from "../../../lib/server-auth";
 import { databaseFailureCategory } from "../../../lib/database";
 
-const APP_VERSION = "pool-v3";
+const APP_VERSION = process.env.VERCEL_GIT_COMMIT_SHA?.slice(0, 7) ?? "local";
 
 const createSchema = z.object({
   productUrl: z
