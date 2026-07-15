@@ -265,6 +265,72 @@ export async function updateCandidateSnapshot(
   return Boolean(updated);
 }
 
+export async function updateCandidateSnapshots(
+  inputs: Array<{ id: string; snapshot: LdxpListingSnapshot }>,
+): Promise<number> {
+  const snapshots = inputs.map(({ id, snapshot }) => ({
+    id,
+    snapshot: ldxpListingSnapshotSchema.parse(snapshot),
+  }));
+  if (snapshots.length === 0) return 0;
+
+  const db = getDatabase();
+  return db.transaction(async (tx) => {
+    const ids = [...new Set(snapshots.map(({ id }) => id))];
+    const candidates = await tx
+      .select({
+        id: discoveryCandidates.id,
+        extractionResult: discoveryCandidates.extractionResult,
+      })
+      .from(discoveryCandidates)
+      .where(
+        and(
+          inArray(discoveryCandidates.id, ids),
+          inArray(discoveryCandidates.status, [
+            "DISCOVERED",
+            "REVIEW_REQUIRED",
+            "APPROVED",
+          ]),
+        ),
+      );
+    const extractionById = new Map(
+      candidates.map((candidate) => [candidate.id, candidate.extractionResult]),
+    );
+    const observedAt = new Date();
+    let updated = 0;
+
+    for (const { id, snapshot } of snapshots) {
+      if (!extractionById.has(id)) continue;
+      const extractionResult = extractionById.get(id);
+      const existing = isRecord(extractionResult) ? extractionResult : {};
+      const [row] = await tx
+        .update(discoveryCandidates)
+        .set({
+          extractionResult: {
+            ...existing,
+            ...snapshot,
+            observedAt: observedAt.toISOString(),
+          },
+          updatedAt: observedAt,
+        })
+        .where(
+          and(
+            eq(discoveryCandidates.id, id),
+            inArray(discoveryCandidates.status, [
+              "DISCOVERED",
+              "REVIEW_REQUIRED",
+              "APPROVED",
+            ]),
+          ),
+        )
+        .returning({ id: discoveryCandidates.id });
+      if (row) updated++;
+    }
+
+    return updated;
+  });
+}
+
 async function postLdxp(
   request: typeof fetch,
   path: string,

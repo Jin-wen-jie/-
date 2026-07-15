@@ -228,9 +228,9 @@ export default function CandidatesClient({
 }
 
 async function syncCandidatePrices(items: Candidate[]): Promise<Candidate[]> {
-  const refreshed: Candidate[] = [];
+  const results: CandidateSyncResult[] = [];
   for (let index = 0; index < items.length; index += PRICE_SYNC_CONCURRENCY) {
-    refreshed.push(
+    results.push(
       ...await Promise.all(
         items.slice(index, index + PRICE_SYNC_CONCURRENCY).map(
           syncCandidatePrice,
@@ -238,12 +238,23 @@ async function syncCandidatePrices(items: Candidate[]): Promise<Candidate[]> {
       ),
     );
   }
-  return refreshed;
+  const snapshots = results.flatMap((result) =>
+    result.snapshot ? [result.snapshot] : []
+  );
+  if (snapshots.length > 0) await persistCandidateSnapshots(snapshots);
+  return results.map((result) => result.candidate);
 }
 
-async function syncCandidatePrice(candidate: Candidate): Promise<Candidate> {
+interface CandidateSyncResult {
+  candidate: Candidate;
+  snapshot?: { id: string; snapshot: Record<string, unknown> };
+}
+
+async function syncCandidatePrice(
+  candidate: Candidate,
+): Promise<CandidateSyncResult> {
   const goodsKey = ldxpGoodsKey(candidate.productUrl);
-  if (!goodsKey) return candidate;
+  if (!goodsKey) return { candidate };
 
   try {
     const goodsRoot = await postLdxp("/shopApi/Shop/goodsInfo", {
@@ -260,7 +271,7 @@ async function syncCandidatePrice(candidate: Candidate): Promise<Candidate> {
       typeof goods.status !== "number" ||
       typeof user.nickname !== "string" ||
       typeof user.token !== "string"
-    ) return candidate;
+    ) return { candidate };
 
     const channelRoot = await postLdxp("/shopApi/Shop/getUserChannel", {
       token: user.token,
@@ -279,7 +290,7 @@ async function syncCandidatePrice(candidate: Candidate): Promise<Candidate> {
       priceRoot.code !== 1 ||
       typeof checkout.original_amount !== "number" ||
       typeof checkout.total_amount !== "number"
-    ) return candidate;
+    ) return { candidate };
     const availability = await probeLdxpAvailability(
       goodsKey,
       goods.status,
@@ -298,24 +309,31 @@ async function syncCandidatePrice(candidate: Candidate): Promise<Candidate> {
       availability,
       observedAt,
     };
-    if (merchantUrl) {
-      await persistCandidateSnapshot(candidate.id, {
-        price: goods.price,
-        totalPrice: checkout.total_amount,
-        mandatoryFee: Math.max(
-          0,
-          Math.round((checkout.total_amount - checkout.original_amount) * 100) /
-            100,
-        ),
-        pageTitle: goods.name,
-        merchantName: user.nickname,
-        merchantUrl,
-        availability: refreshed.availability,
-      });
-    }
-    return refreshed;
+    const snapshot = merchantUrl
+      ? {
+        id: candidate.id,
+        snapshot: {
+          price: goods.price,
+          totalPrice: checkout.total_amount,
+          mandatoryFee: Math.max(
+            0,
+            Math.round(
+              (checkout.total_amount - checkout.original_amount) * 100,
+            ) / 100,
+          ),
+          pageTitle: goods.name,
+          merchantName: user.nickname,
+          merchantUrl,
+          availability: refreshed.availability,
+        },
+      }
+      : undefined;
+    return {
+      candidate: refreshed,
+      ...(snapshot ? { snapshot } : {}),
+    };
   } catch {
-    return candidate;
+    return { candidate };
   }
 }
 
@@ -359,9 +377,8 @@ async function postLdxp(
   return recordValue(await response.json());
 }
 
-async function persistCandidateSnapshot(
-  id: string,
-  snapshot: Record<string, unknown>,
+async function persistCandidateSnapshots(
+  snapshots: Array<{ id: string; snapshot: Record<string, unknown> }>,
 ): Promise<void> {
   const response = await fetch("/api/candidates", {
     method: "PUT",
@@ -369,7 +386,7 @@ async function persistCandidateSnapshot(
       "content-type": "application/json",
       "x-csrf-token": readCsrfToken(),
     },
-    body: JSON.stringify({ id, snapshot }),
+    body: JSON.stringify({ snapshots }),
   });
   if (!response.ok) throw new Error(`WRITE_HTTP_${response.status}`);
 }

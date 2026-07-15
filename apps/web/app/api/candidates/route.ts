@@ -7,6 +7,7 @@ import {
 import {
   ldxpListingSnapshotSchema,
   updateCandidateSnapshot,
+  updateCandidateSnapshots,
 } from "../../../lib/admin-read-repository";
 import {
   assertAdminMutation,
@@ -25,6 +26,10 @@ const createSchema = z.object({
 const priceSnapshotSchema = z.object({
   id: z.string().min(1),
   snapshot: ldxpListingSnapshotSchema,
+});
+
+const priceSnapshotBatchSchema = z.object({
+  snapshots: z.array(priceSnapshotSchema).min(1).max(100),
 });
 
 export async function GET(request: Request) {
@@ -70,19 +75,25 @@ export async function PUT(request: Request) {
       { status: authorization.status },
     );
   }
-  const body = priceSnapshotSchema.safeParse(
-    await request.json().catch(() => ({})),
-  );
-  if (!body.success) {
+  const payload = await request.json().catch(() => ({}));
+  const batch = priceSnapshotBatchSchema.safeParse(payload);
+  const single = priceSnapshotSchema.safeParse(payload);
+  if (!batch.success && !single.success) {
     return NextResponse.json({ error: "INVALID_PRICE_SNAPSHOT" }, { status: 400 });
   }
 
-  const updated = await updateCandidateSnapshot(
-    body.data.id,
-    body.data.snapshot,
-  );
+  let updated: number;
+  if (batch.success) {
+    updated = await updateCandidateSnapshots(batch.data.snapshots);
+  } else if (single.success) {
+    updated = Number(
+      await updateCandidateSnapshot(single.data.id, single.data.snapshot),
+    );
+  } else {
+    return NextResponse.json({ error: "INVALID_PRICE_SNAPSHOT" }, { status: 400 });
+  }
   return NextResponse.json(
     { updated },
-    { status: updated ? 200 : 404 },
+    { status: updated > 0 ? 200 : 404 },
   );
 }

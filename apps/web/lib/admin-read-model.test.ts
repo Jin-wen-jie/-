@@ -17,6 +17,7 @@ import {
   fetchLdxpListingSnapshot,
   getDashboardCounts,
   updateCandidateSnapshot,
+  updateCandidateSnapshots,
 } from "./admin-read-repository.js";
 
 describe("admin read model", () => {
@@ -299,6 +300,50 @@ describe("admin read model", () => {
       ]),
     );
     expect(query.params).not.toContain("REJECTED");
+  });
+
+  it("updates a snapshot batch inside one database transaction", async () => {
+    const selectQuery = {
+      from: vi.fn(),
+      where: vi.fn().mockResolvedValue([
+        { id: "candidate-1", extractionResult: { focus: "K12" } },
+        { id: "candidate-2", extractionResult: { focus: "Bug Team" } },
+      ]),
+    };
+    selectQuery.from.mockReturnValue(selectQuery);
+    const returning = vi.fn()
+      .mockResolvedValueOnce([{ id: "candidate-1" }])
+      .mockResolvedValueOnce([{ id: "candidate-2" }]);
+    const updateQuery = {
+      set: vi.fn(),
+      where: vi.fn(),
+      returning,
+    };
+    updateQuery.set.mockReturnValue(updateQuery);
+    updateQuery.where.mockReturnValue(updateQuery);
+    const transaction = vi.fn(async (operation: (tx: unknown) => unknown) =>
+      operation({
+        select: vi.fn().mockReturnValue(selectQuery),
+        update: vi.fn().mockReturnValue(updateQuery),
+      })
+    );
+    mocks.getDatabase.mockReturnValue({ transaction });
+    const snapshot = {
+      price: 1.4,
+      totalPrice: 1.44,
+      mandatoryFee: 0.04,
+      pageTitle: "K12 商品",
+      merchantName: "公开商铺",
+      merchantUrl: "https://pay.ldxp.cn/shop/SHOP1",
+      availability: "IN_STOCK" as const,
+    };
+
+    await expect(updateCandidateSnapshots([
+      { id: "candidate-1", snapshot },
+      { id: "candidate-2", snapshot },
+    ])).resolves.toBe(2);
+    expect(transaction).toHaveBeenCalledTimes(1);
+    expect(returning).toHaveBeenCalledTimes(2);
   });
 
   it("counts dashboard records in PostgreSQL without loading every row", async () => {

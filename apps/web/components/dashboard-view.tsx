@@ -82,12 +82,21 @@ export function DashboardView({
           Date.now() - new Date(row.lastVerified).getTime() >=
             LIVE_REFRESH_INTERVAL_MS,
       );
-      let updated = 0;
+      const snapshots: CandidateSnapshot[] = [];
       const failures = new Set<string>();
       for (const row of targets) {
         try {
-          if (await refreshLdxpCandidate(row)) updated++;
+          const snapshot = await refreshLdxpCandidate(row);
+          if (snapshot) snapshots.push(snapshot);
           else failures.add("NOT_UPDATED");
+        } catch (error) {
+          failures.add(clientFailureCategory(error));
+        }
+      }
+      let updated = 0;
+      if (snapshots.length > 0) {
+        try {
+          updated = await persistCandidateSnapshots(snapshots);
         } catch (error) {
           failures.add(clientFailureCategory(error));
         }
@@ -135,10 +144,17 @@ export function DashboardView({
   );
 }
 
-async function refreshLdxpCandidate(row: RankingView): Promise<boolean> {
+interface CandidateSnapshot {
+  id: string;
+  snapshot: Record<string, unknown>;
+}
+
+async function refreshLdxpCandidate(
+  row: RankingView,
+): Promise<CandidateSnapshot | null> {
   const productUrl = new URL(row.productUrl);
   const match = productUrl.pathname.match(/^\/item\/([A-Za-z0-9]+)\/?$/);
-  if (productUrl.origin !== "https://pay.ldxp.cn" || !match?.[1]) return false;
+  if (productUrl.origin !== "https://pay.ldxp.cn" || !match?.[1]) return null;
 
   const goodsKey = match[1];
   const goodsResult = await postLdxp("/shopApi/Shop/goodsInfo", {
@@ -182,31 +198,38 @@ async function refreshLdxpCandidate(row: RankingView): Promise<boolean> {
     checkout.total_amount,
   );
 
+  return {
+    id: row.id,
+    snapshot: {
+      price: goods.price,
+      totalPrice: checkout.total_amount,
+      mandatoryFee: Math.max(
+        0,
+        Math.round((checkout.total_amount - checkout.original_amount) * 100) /
+          100,
+      ),
+      pageTitle: goods.name,
+      merchantName: user.nickname,
+      merchantUrl: user.link,
+      availability,
+    },
+  };
+}
+
+async function persistCandidateSnapshots(
+  snapshots: CandidateSnapshot[],
+): Promise<number> {
   const response = await fetch("/api/candidates", {
     method: "PUT",
     headers: {
       "content-type": "application/json",
       "x-csrf-token": readCsrfToken(),
     },
-    body: JSON.stringify({
-      id: row.id,
-      snapshot: {
-        price: goods.price,
-        totalPrice: checkout.total_amount,
-        mandatoryFee: Math.max(
-          0,
-          Math.round((checkout.total_amount - checkout.original_amount) * 100) /
-            100,
-        ),
-        pageTitle: goods.name,
-        merchantName: user.nickname,
-        merchantUrl: user.link,
-        availability,
-      },
-    }),
+    body: JSON.stringify({ snapshots }),
   });
   if (!response.ok) throw new Error(`WRITE_HTTP_${response.status}`);
-  return response.ok;
+  const result = await response.json() as { updated?: unknown };
+  return typeof result.updated === "number" ? result.updated : 0;
 }
 
 async function probeLdxpAvailability(
