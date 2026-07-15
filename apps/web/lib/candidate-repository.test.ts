@@ -56,6 +56,7 @@ describe("candidate repository listing", () => {
     expect(sqlQuery.sql).toContain("Bug Team");
     expect(sqlQuery.sql).toContain("totalPrice");
     expect(sqlQuery.sql).toContain("price");
+    expect(sqlQuery.sql.match(/\)::numeric/g)).toHaveLength(4);
   });
 });
 

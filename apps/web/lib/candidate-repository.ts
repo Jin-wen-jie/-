@@ -47,9 +47,9 @@ async function listCandidatesOnce(options: {
   const priceText = sql<string | null>`${discoveryCandidates.extractionResult} ->> 'price'`;
   const effectivePrice = sql<number | null>`coalesce(
     case when ${totalPriceText} ~ '^[0-9]+([.][0-9]+)?$'
-      then nullif(${totalPriceText}::numeric, 0) end,
+      then nullif((${totalPriceText})::numeric, 0) end,
     case when ${priceText} ~ '^[0-9]+([.][0-9]+)?$'
-      then nullif(${priceText}::numeric, 0) end
+      then nullif((${priceText})::numeric, 0) end
   )`;
   const rows = await db
     .select({
