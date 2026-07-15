@@ -54,27 +54,24 @@ export function DashboardView({
     const refreshPrices = async () => {
       if (running || document.visibilityState !== "visible") return;
       running = true;
-      const results = await Promise.allSettled(
-        rowsRef.current.map(refreshLdxpCandidate),
+      const targets = rowsRef.current.filter(
+        (row) => Date.now() - new Date(row.lastVerified).getTime() >= 55_000,
       );
+      let updated = 0;
+      const failures = new Set<string>();
+      for (const row of targets) {
+        try {
+          if (await refreshLdxpCandidate(row)) updated++;
+          else failures.add("NOT_UPDATED");
+        } catch (error) {
+          failures.add(clientFailureCategory(error));
+        }
+      }
       running = false;
-      const updated = results.filter(
-        (result) => result.status === "fulfilled" && result.value,
-      ).length;
       setRefreshDiagnostic({
-        attempted: results.length,
+        attempted: targets.length,
         updated,
-        failures: [
-          ...new Set(
-            results.flatMap((result) =>
-              result.status === "rejected"
-                ? [clientFailureCategory(result.reason)]
-                : result.value
-                  ? []
-                  : ["NOT_UPDATED"]
-            ),
-          ),
-        ].join(","),
+        failures: [...failures].join(","),
       });
       if (
         !stopped &&
