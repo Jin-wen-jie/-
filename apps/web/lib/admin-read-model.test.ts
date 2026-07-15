@@ -12,7 +12,10 @@ import {
   toApprovedCandidateRankingView,
   toRankingView,
 } from "./admin-read-model.js";
-import { getDashboardCounts } from "./admin-read-repository.js";
+import {
+  fetchLdxpListingSnapshot,
+  getDashboardCounts,
+} from "./admin-read-repository.js";
 
 describe("admin read model", () => {
   beforeEach(() => {
@@ -88,6 +91,86 @@ describe("admin read model", () => {
       merchantUrl: "https://shop.example/",
       lastVerified: "2026-07-14T19:25:00.000Z",
     });
+  });
+
+  it("uses the mandatory checkout total as the effective unit price", () => {
+    expect(
+      toApprovedCandidateRankingView({
+        id: "candidate-1",
+        productUrl: "https://pay.ldxp.cn/item/item1",
+        extractionResult: {
+          price: 1.4,
+          totalPrice: 1.44,
+          merchantName: "公开商铺",
+          focus: "K12",
+          observedAt: "2026-07-15T06:00:00.000Z",
+        },
+        eventSourceUrl: null,
+        createdAt: new Date("2026-07-14T18:00:00.000Z"),
+      }),
+    ).toMatchObject({
+      price: "CNY 1.40",
+      totalCny: "¥1.44",
+      unitCny: "¥1.44/件",
+    });
+  });
+
+  it("reads the current listing and mandatory fee from the public LDXP APIs", async () => {
+    const request = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(Response.json({
+        code: 1,
+        data: {
+          goods_key: "f1vz1u",
+          status: 1,
+          name: "K12 商品",
+          price: 1.4,
+          user: {
+            nickname: "奥特曼",
+            token: "SHOP1",
+            link: "https://pay.ldxp.cn/shop/SHOP1",
+          },
+        },
+      }))
+      .mockResolvedValueOnce(Response.json({
+        code: 1,
+        data: [{ id: 1 }],
+      }))
+      .mockResolvedValueOnce(Response.json({
+        code: 1,
+        data: {
+          original_amount: 1.4,
+          total_amount: 1.44,
+          fee: 0.04,
+        },
+      }));
+
+    await expect(
+      fetchLdxpListingSnapshot(
+        "https://pay.ldxp.cn/item/f1vz1u",
+        request,
+      ),
+    ).resolves.toEqual({
+      price: 1.4,
+      totalPrice: 1.44,
+      mandatoryFee: 0.04,
+      pageTitle: "K12 商品",
+      merchantName: "奥特曼",
+      merchantUrl: "https://pay.ldxp.cn/shop/SHOP1",
+      availability: "IN_STOCK",
+    });
+    expect(request).toHaveBeenNthCalledWith(
+      3,
+      "https://pay.ldxp.cn/shopApi/Shop/getGoodsPrice",
+      expect.objectContaining({
+        body: JSON.stringify({
+          goods_key: "f1vz1u",
+          quantity: 1,
+          coupon_code: "",
+          channel_id: 1,
+        }),
+      }),
+    );
   });
 
   it("counts dashboard records in PostgreSQL without loading every row", async () => {

@@ -47,6 +47,7 @@ export function toApprovedCandidateRankingView(
     ? input.extractionResult
     : {};
   const price = numericValue(extraction.price);
+  const totalPrice = numericValue(extraction.totalPrice) ?? price;
   const merchantName = stringValue(extraction.merchantName) ?? "未识别商家";
   const merchantUrl =
     stringValue(extraction.merchantUrl) ?? new URL(input.productUrl).origin + "/";
@@ -64,8 +65,8 @@ export function toApprovedCandidateRankingView(
     spec: focus,
     merchant: merchantName,
     price: price === null ? "—" : `CNY ${price.toFixed(2)}`,
-    totalCny: price === null ? "—" : `¥${price.toFixed(2)}`,
-    unitCny: price === null ? "—" : `¥${price.toFixed(2)}/件`,
+    totalCny: totalPrice === null ? "—" : `¥${totalPrice.toFixed(2)}`,
+    unitCny: totalPrice === null ? "—" : `¥${totalPrice.toFixed(2)}/件`,
     supplyEvidence: evidenceParts.filter(Boolean).join(" · ") || "暂无库存证据",
     confidence: null,
     lastVerified: observedAt.toISOString(),

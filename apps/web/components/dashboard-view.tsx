@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import { DataTable, type Column } from "./data-table";
 import { ExternalLink } from "./external-link";
 import type { RankingView } from "../lib/admin-read-model";
@@ -35,6 +36,15 @@ export function DashboardView({
   counts: { candidates: number; merchants: number; listings: number };
 }) {
   const [tab, setTab] = useState<"price" | "supply">("price");
+  const router = useRouter();
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === "visible") router.refresh();
+    }, 60_000);
+    return () => window.clearInterval(timer);
+  }, [router]);
+
   return (
     <div>
       <h2 className="mb-1 text-xl font-bold text-gray-900">K12 / Bug Team 比价总览</h2>

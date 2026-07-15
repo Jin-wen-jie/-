@@ -1,4 +1,5 @@
-import { desc, eq, sql } from "drizzle-orm";
+import { and, asc, desc, eq, lt, sql } from "drizzle-orm";
+import { z } from "zod";
 import {
   discoveryCandidates,
   discoveryEvents,
@@ -35,7 +36,172 @@ export async function listRankingViews(limit = 200): Promise<RankingView[]> {
     .orderBy(desc(discoveryCandidates.updatedAt))
     .limit(boundedLimit);
 
-  return rows.map(toApprovedCandidateRankingView);
+  return rows
+    .map(toApprovedCandidateRankingView)
+    .sort((left, right) => moneyValue(left.unitCny) - moneyValue(right.unitCny));
+}
+
+const ldxpGoodsSchema = z.object({
+  code: z.literal(1),
+  data: z.object({
+    goods_key: z.string().min(1),
+    status: z.number(),
+    name: z.string().min(1),
+    price: z.number().nonnegative(),
+    user: z.object({
+      nickname: z.string().min(1),
+      token: z.string().min(1),
+      link: z.string().url(),
+    }),
+  }),
+});
+
+const ldxpChannelsSchema = z.object({
+  code: z.literal(1),
+  data: z.array(z.object({ id: z.number().int().positive() })),
+});
+
+const ldxpPriceSchema = z.object({
+  code: z.literal(1),
+  data: z.object({
+    original_amount: z.number().nonnegative(),
+    total_amount: z.number().nonnegative(),
+    fee: z.number().nonnegative(),
+  }),
+});
+
+export interface LdxpListingSnapshot {
+  price: number;
+  totalPrice: number;
+  mandatoryFee: number;
+  pageTitle: string;
+  merchantName: string;
+  merchantUrl: string;
+  availability: "IN_STOCK" | "OUT_OF_STOCK";
+}
+
+export async function fetchLdxpListingSnapshot(
+  productUrl: string,
+  request: typeof fetch = fetch,
+): Promise<LdxpListingSnapshot> {
+  const parsedUrl = new URL(productUrl);
+  const match = parsedUrl.pathname.match(/^\/item\/([A-Za-z0-9]+)\/?$/);
+  if (parsedUrl.origin !== "https://pay.ldxp.cn" || !match?.[1]) {
+    throw new Error("UNSUPPORTED_LDXP_PRODUCT_URL");
+  }
+
+  const goodsKey = match[1];
+  const goods = ldxpGoodsSchema.parse(
+    await postLdxp(request, "/shopApi/Shop/goodsInfo", {
+      goods_key: goodsKey,
+      trade_no: null,
+    }),
+  ).data;
+  if (goods.goods_key !== goodsKey) throw new Error("LDXP_PRODUCT_MISMATCH");
+
+  const channels = ldxpChannelsSchema.parse(
+    await postLdxp(request, "/shopApi/Shop/getUserChannel", {
+      token: goods.user.token,
+    }),
+  ).data;
+  const channelId = channels[0]?.id ?? 0;
+  const checkout = ldxpPriceSchema.parse(
+    await postLdxp(request, "/shopApi/Shop/getGoodsPrice", {
+      goods_key: goodsKey,
+      quantity: 1,
+      coupon_code: "",
+      channel_id: channelId,
+    }),
+  ).data;
+
+  return {
+    price: goods.price,
+    totalPrice: checkout.total_amount,
+    mandatoryFee:
+      Math.max(
+        0,
+        Math.round(
+          (checkout.total_amount - checkout.original_amount) * 100,
+        ) / 100,
+      ),
+    pageTitle: goods.name,
+    merchantName: goods.user.nickname,
+    merchantUrl: goods.user.link,
+    availability: goods.status === 1 ? "IN_STOCK" : "OUT_OF_STOCK",
+  };
+}
+
+export async function refreshApprovedCandidatePrices(
+  maxAgeMs = 60_000,
+): Promise<{ attempted: number; updated: number }> {
+  const db = getDatabase();
+  const cutoff = new Date(Date.now() - maxAgeMs);
+  const candidates = await db
+    .select({
+      id: discoveryCandidates.id,
+      productUrl: discoveryCandidates.productUrl,
+      extractionResult: discoveryCandidates.extractionResult,
+    })
+    .from(discoveryCandidates)
+    .where(
+      and(
+        eq(discoveryCandidates.status, "APPROVED"),
+        lt(discoveryCandidates.updatedAt, cutoff),
+      ),
+    )
+    .orderBy(asc(discoveryCandidates.updatedAt))
+    .limit(50);
+
+  const results = await Promise.allSettled(
+    candidates.map(async (candidate) => {
+      const snapshot = await fetchLdxpListingSnapshot(candidate.productUrl);
+      const observedAt = new Date();
+      const existing = isRecord(candidate.extractionResult)
+        ? candidate.extractionResult
+        : {};
+      const [updated] = await db
+        .update(discoveryCandidates)
+        .set({
+          extractionResult: {
+            ...existing,
+            ...snapshot,
+            observedAt: observedAt.toISOString(),
+          },
+          updatedAt: observedAt,
+        })
+        .where(
+          and(
+            eq(discoveryCandidates.id, candidate.id),
+            eq(discoveryCandidates.status, "APPROVED"),
+          ),
+        )
+        .returning({ id: discoveryCandidates.id });
+      return Boolean(updated);
+    }),
+  );
+
+  return {
+    attempted: candidates.length,
+    updated: results.filter(
+      (result) => result.status === "fulfilled" && result.value,
+    ).length,
+  };
+}
+
+async function postLdxp(
+  request: typeof fetch,
+  path: string,
+  body: Record<string, unknown>,
+): Promise<unknown> {
+  const response = await request(`https://pay.ldxp.cn${path}`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+    redirect: "error",
+    signal: AbortSignal.timeout(6_000),
+  });
+  if (!response.ok) throw new Error(`LDXP_HTTP_${response.status}`);
+  return response.json();
 }
 
 export async function getDashboardCounts() {
@@ -123,4 +289,9 @@ function stringValue(value: unknown): string | null {
 
 function numberValue(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function moneyValue(value: string): number {
+  const parsed = Number(value.replace(/[^0-9.-]/g, ""));
+  return Number.isFinite(parsed) ? parsed : Number.POSITIVE_INFINITY;
 }
