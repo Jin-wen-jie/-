@@ -6,7 +6,8 @@ export function getDatabase(): Db {
   if (database) return database;
   const databaseUrl = process.env.DATABASE_URL;
   if (!databaseUrl) throw new Error("DATABASE_URL is required");
-  database = createDb(databaseUrl, {
+  const connectionUrl = transactionPoolerUrl(databaseUrl);
+  database = createDb(connectionUrl, {
     maxConnections: usesLocalDatabase(databaseUrl) ? 4 : 1,
     idleTimeoutSeconds: usesSupabasePooler(databaseUrl) ? 5 : 20,
   });
@@ -15,7 +16,7 @@ export function getDatabase(): Db {
 
 export async function withDatabaseRetry<T>(
   operation: () => Promise<T>,
-  attempts = 3,
+  attempts = 5,
 ): Promise<T> {
   let lastError: unknown;
   for (let attempt = 1; attempt <= attempts; attempt++) {
@@ -24,10 +25,19 @@ export async function withDatabaseRetry<T>(
     } catch (error) {
       lastError = error;
       if (!isTransientDatabaseError(error) || attempt === attempts) throw error;
-      await new Promise((resolve) => setTimeout(resolve, attempt * 150));
+      const delay = Math.min(4_000, 500 * (2 ** (attempt - 1)));
+      await new Promise((resolve) => setTimeout(resolve, delay));
     }
   }
   throw lastError;
+}
+
+function transactionPoolerUrl(databaseUrl: string): string {
+  if (!usesSupabasePooler(databaseUrl)) return databaseUrl;
+  const url = new URL(databaseUrl);
+  if (url.port === "6543") return databaseUrl;
+  url.port = "6543";
+  return url.toString();
 }
 
 function isTransientDatabaseError(error: unknown): boolean {

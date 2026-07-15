@@ -48,6 +48,15 @@ describe("web database configuration", () => {
     );
   });
 
+  it("switches Supabase session pooling to transaction pooling", async () => {
+    await getDatabaseForUrl("postgres://user:pass@aws-0-ap-southeast-1.pooler.supabase.com:5432/postgres");
+
+    expect(mocks.createDb).toHaveBeenCalledWith(
+      "postgres://user:pass@aws-0-ap-southeast-1.pooler.supabase.com:6543/postgres",
+      { maxConnections: 1, idleTimeoutSeconds: 5 },
+    );
+  });
+
   it("allows bounded concurrency for the local development database", async () => {
     await getDatabaseForUrl("postgres://postgres:pass@localhost:5432/compare");
 
