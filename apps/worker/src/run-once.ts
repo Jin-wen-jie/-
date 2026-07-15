@@ -57,7 +57,12 @@ export function parseRunOnceConfig(
       googleApiKey: optionalValue(env, "GOOGLE_SEARCH_API_KEY"),
       googleCx: optionalValue(env, "GOOGLE_SEARCH_CX"),
       serperApiKey: optionalValue(env, "SERPER_API_KEY"),
-      maxResults: positiveInteger(env, "PUBLIC_SEARCH_MAX_RESULTS", 50),
+      maxResults: positiveInteger(
+        env,
+        "PUBLIC_SEARCH_MAX_RESULTS",
+        50,
+        200,
+      ),
     },
   };
 }

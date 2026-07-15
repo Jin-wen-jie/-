@@ -79,7 +79,7 @@ describe("hourly collection workflow", () => {
       LISTING_LIMIT: "50",
       WORKER_CONCURRENCY: "4",
       WORKER_DEADLINE_MS: "1500000",
-      PUBLIC_SEARCH_MAX_RESULTS: "50",
+      PUBLIC_SEARCH_MAX_RESULTS: "150",
     });
   });
 

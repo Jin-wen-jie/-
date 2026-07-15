@@ -208,21 +208,58 @@ describe("public web discovery", () => {
   });
 
   it("collects PriceAI leads with source metadata for direct validation", async () => {
+    const requestedOffsets: string[] = [];
     const request = async (input: Parameters<typeof fetch>[0]) => {
       const url = new URL(String(input));
       if (url.hostname === "priceai.cc") {
-        return new Response(priceAiPage([{
-          url: "https://pay.ldxp.cn/item/new-k12",
-          sourceTitle: "K12 Team 成品",
-          sourceStoreName: "公开商铺",
-          price: 0.88,
-          currency: "CNY",
-          status: "in_stock",
-          stockCount: 18,
-          filterTags: ["team_k12", "proxy_supported"],
-          verifiedAt: "2026-07-15T09:00:00.000Z",
-          hidden: false,
-        }]));
+        if (url.pathname.startsWith("/api/")) {
+          const offset = url.searchParams.get("offset") ?? "0";
+          requestedOffsets.push(offset);
+          return Response.json({
+            total: 201,
+            limited: true,
+            offers: offset === "0"
+              ? [
+                {
+                  url: "https://pay.ldxp.cn/item/new-k12",
+                  sourceTitle: "K12 Team 成品",
+                  sourceStoreName: "公开商铺",
+                  price: 0.88,
+                  currency: "CNY",
+                  status: "in_stock",
+                  stockCount: 18,
+                  filterTags: ["team_k12", "proxy_supported"],
+                  verifiedAt: "2026-07-15T09:00:00.000Z",
+                  hidden: false,
+                },
+                {
+                  url: "https://pay.ldxp.cn/item/high-k12",
+                  sourceTitle: "High K12 Team account",
+                  price: 1.21,
+                  status: "in_stock",
+                  stockCount: 10,
+                  filterTags: ["team_k12"],
+                },
+                {
+                  url: "https://pay.ldxp.cn/item/sold-out-k12",
+                  sourceTitle: "Sold out K12 Team account",
+                  price: 0.5,
+                  status: "out_of_stock",
+                  stockCount: 0,
+                  filterTags: ["team_k12"],
+                },
+              ]
+              : [{
+                url: "https://pay.ldxp.cn/item/new-bug-team",
+                sourceTitle: "Bug Team account",
+                price: 8,
+                status: "in_stock",
+                stockCount: 2,
+                filterTags: ["team_bug"],
+              }],
+          });
+        }
+        return new Response(priceAiPage());
       }
       return new Response(
         "<rss><channel><title>empty</title></channel></rss>",
@@ -235,6 +272,7 @@ describe("public web discovery", () => {
       request as typeof fetch,
     );
 
+    expect(requestedOffsets).toEqual(["0", "200"]);
     expect(result.candidates).toEqual([
       expect.objectContaining({
         url: "https://pay.ldxp.cn/item/new-k12",
@@ -249,11 +287,16 @@ describe("public web discovery", () => {
           observedAt: "2026-07-15T09:00:00.000Z",
         }),
       }),
+      expect.objectContaining({
+        url: "https://pay.ldxp.cn/item/new-bug-team",
+        engine: "priceai",
+        focus: "Bug Team",
+      }),
     ]);
     expect(result.engines[0]).toEqual({
       engine: "priceai",
       status: "ACTIVE",
-      resultCount: 1,
+      resultCount: 2,
       errorCategory: null,
     });
   });

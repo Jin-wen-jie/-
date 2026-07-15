@@ -83,6 +83,7 @@ export interface WorkerRepositoryWithDiscovery extends WorkerRepository {
 export const CANDIDATE_VALIDATION_LEASE_MS = 5 * 60 * 1_000;
 const MAX_DISCOVERED_PLATFORM_LINKS = 50;
 const MAX_DISCOVERED_URL_LENGTH = 2_048;
+const MAX_PUBLIC_SEARCH_CANDIDATES = 200;
 
 interface WorkerRepositoryOptions {
   now?: () => Date;
@@ -329,7 +330,12 @@ export function createWorkerRepositoryFromDb(
       const observedAt = now();
       return db.transaction(async (tx) => {
         let inserted = 0;
-        for (const candidate of result.candidates.slice(0, 50)) {
+        for (
+          const candidate of result.candidates.slice(
+            0,
+            MAX_PUBLIC_SEARCH_CANDIDATES,
+          )
+        ) {
           const canonicalUrl = canonicalizeUrl(candidate.url);
           if (canonicalUrl.length > MAX_DISCOVERED_URL_LENGTH) continue;
           const id = randomUUID();

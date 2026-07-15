@@ -713,6 +713,15 @@ describe("parseRunOnceConfig", () => {
     ).toThrow("WORKER_CONCURRENCY must not exceed 16");
   });
 
+  it("rejects public search result limits above the persistence maximum", () => {
+    expect(() =>
+      parseRunOnceConfig({
+        ...requiredEnv,
+        PUBLIC_SEARCH_MAX_RESULTS: "201",
+      })
+    ).toThrow("PUBLIC_SEARCH_MAX_RESULTS must not exceed 200");
+  });
+
   it("requires the database URL and validator token", () => {
     expect(() => parseRunOnceConfig({})).toThrow("DATABASE_URL is required");
     expect(() =>

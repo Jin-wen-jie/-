@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parsePriceAiPage } from "./priceai.js";
+import { parsePriceAiApiPage, parsePriceAiPage } from "./priceai.js";
 
 function pageWithInitialData(data: unknown): string {
   const payload = `2d:{"initialData":${JSON.stringify(data)}}`;
@@ -7,6 +7,35 @@ function pageWithInitialData(data: unknown): string {
 }
 
 describe("PriceAI connector", () => {
+  it("parses structured offer data from the public API", () => {
+    expect(parsePriceAiApiPage({
+      total: 2,
+      limited: false,
+      offers: [
+        {
+          url: "https://pay.ldxp.cn/item/visible",
+          sourceTitle: "K12 Team account",
+          price: 1.2,
+          filterTags: ["team_k12"],
+          hidden: false,
+        },
+        {
+          url: "https://pay.ldxp.cn/item/hidden",
+          sourceTitle: "Hidden K12 Team account",
+          filterTags: ["team_k12"],
+          hidden: true,
+        },
+      ],
+    })).toEqual({
+      total: 2,
+      limited: false,
+      offers: [expect.objectContaining({
+        url: "https://pay.ldxp.cn/item/visible",
+        price: 1.2,
+      })],
+    });
+  });
+
   it("parses structured offer data from Next.js RSC chunks", () => {
     const html = pageWithInitialData({
       total: 471,

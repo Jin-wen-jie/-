@@ -36,6 +36,10 @@ export interface PriceAiPageData {
   limited: boolean;
 }
 
+export function parsePriceAiApiPage(value: unknown): PriceAiPageData {
+  return normalizePageData(initialDataSchema.parse(value));
+}
+
 export function parsePriceAiPage(html: string): PriceAiPageData {
   if (Buffer.byteLength(html, "utf8") > MAX_PRICEAI_HTML_BYTES) {
     throw new Error("PRICEAI_RESPONSE_TOO_LARGE");
@@ -62,7 +66,12 @@ export function parsePriceAiPage(html: string): PriceAiPageData {
   });
 
   const initialData = extractJsonObject(chunks.join(""), '"initialData":');
-  const parsed = initialDataSchema.parse(initialData);
+  return normalizePageData(initialDataSchema.parse(initialData));
+}
+
+function normalizePageData(
+  parsed: z.infer<typeof initialDataSchema>,
+): PriceAiPageData {
   return {
     total: parsed.total,
     offers: parsed.offers.filter((offer) => !offer.hidden),

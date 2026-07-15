@@ -6,10 +6,14 @@ import type { ValidatorResponse } from "../validator-client.js";
 import { XMLParser } from "fast-xml-parser";
 import { z } from "zod";
 import {
+  parsePriceAiApiPage,
   parsePriceAiPage,
   PRICEAI_TEAM_BUSINESS_URL,
   type PriceAiOffer,
 } from "../connectors/priceai.js";
+
+const PRICEAI_PAGE_SIZE = 200;
+const MAX_PRICEAI_OFFERS = 500;
 
 export interface JobContext {
   baseUrl: string;
@@ -290,23 +294,27 @@ async function runSearchProvider(provider: SearchProvider): Promise<{
 }
 
 async function searchPriceAi(request: typeof fetch): Promise<SearchHit[]> {
-  const response = await searchRequest(
-    request,
-    new URL(PRICEAI_TEAM_BUSINESS_URL),
-    {
-      headers: {
-        accept: "text/html,application/xhtml+xml",
-        "user-agent": "PublicPriceResearch/1.0",
-      },
-    },
-  );
   let offers: PriceAiOffer[];
   try {
-    offers = parsePriceAiPage(await response.text()).offers;
+    offers = await fetchPriceAiOffers(request);
   } catch {
-    throw new SearchProviderError("INVALID_RESPONSE");
+    const response = await searchRequest(
+      request,
+      new URL(PRICEAI_TEAM_BUSINESS_URL),
+      {
+        headers: {
+          accept: "text/html,application/xhtml+xml",
+          "user-agent": "PublicPriceResearch/1.0",
+        },
+      },
+    );
+    try {
+      offers = parsePriceAiPage(await response.text()).offers;
+    } catch {
+      throw new SearchProviderError("INVALID_RESPONSE");
+    }
   }
-  return offers.map((offer) => {
+  return offers.filter(isReviewablePriceAiOffer).map((offer) => {
     const focus = offer.filterTags.includes("team_bug")
       ? "Bug Team"
       : offer.filterTags.includes("team_k12")
@@ -345,6 +353,46 @@ async function searchPriceAi(request: typeof fetch): Promise<SearchHit[]> {
       },
     };
   });
+}
+
+async function fetchPriceAiOffers(
+  request: typeof fetch,
+): Promise<PriceAiOffer[]> {
+  const offers: PriceAiOffer[] = [];
+  let total = PRICEAI_PAGE_SIZE;
+
+  for (
+    let offset = 0;
+    offset < total && offset < MAX_PRICEAI_OFFERS;
+    offset += PRICEAI_PAGE_SIZE
+  ) {
+    const url = new URL(
+      "/api/products/chatgpt-team-business/offers",
+      PRICEAI_TEAM_BUSINESS_URL,
+    );
+    url.searchParams.set("limit", String(PRICEAI_PAGE_SIZE));
+    url.searchParams.set("offset", String(offset));
+    const response = await searchRequest(request, url, {
+      headers: {
+        accept: "application/json",
+        "user-agent": "PublicPriceResearch/1.0",
+      },
+    });
+    const page = parsePriceAiApiPage(await response.json());
+    total = Math.min(page.total, MAX_PRICEAI_OFFERS);
+    offers.push(...page.offers);
+  }
+
+  return offers;
+}
+
+function isReviewablePriceAiOffer(offer: PriceAiOffer): boolean {
+  if (priceAiAvailability(offer) !== "IN_STOCK") return false;
+  if (offer.filterTags.includes("team_bug")) return true;
+  if (!offer.filterTags.includes("team_k12")) return false;
+  return (
+    typeof offer.price === "number" && offer.price > 0 && offer.price <= 1.2
+  );
 }
 
 function priceAiAvailability(
