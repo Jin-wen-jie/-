@@ -19,7 +19,7 @@ export async function listRankingViews(limit = 200): Promise<RankingView[]> {
   const boundedLimit = Number.isFinite(limit)
     ? Math.min(500, Math.max(1, Math.floor(limit)))
     : 200;
-  const rows = await db
+  const rows = await withDatabaseRetry(() => db
     .select({
       id: discoveryCandidates.id,
       productUrl: discoveryCandidates.productUrl,
@@ -34,7 +34,7 @@ export async function listRankingViews(limit = 200): Promise<RankingView[]> {
     )
     .where(eq(discoveryCandidates.status, "APPROVED"))
     .orderBy(desc(discoveryCandidates.updatedAt))
-    .limit(boundedLimit);
+    .limit(boundedLimit));
 
   return rows
     .map(toApprovedCandidateRankingView)
@@ -178,7 +178,7 @@ export async function refreshApprovedCandidatePrices(): Promise<{
   failures: string[];
 }> {
   const db = getDatabase();
-  const candidates = await db
+  const candidates = await withDatabaseRetry(() => db
     .select({
       id: discoveryCandidates.id,
       productUrl: discoveryCandidates.productUrl,
@@ -187,7 +187,7 @@ export async function refreshApprovedCandidatePrices(): Promise<{
     .from(discoveryCandidates)
     .where(eq(discoveryCandidates.status, "APPROVED"))
     .orderBy(desc(discoveryCandidates.updatedAt))
-    .limit(50);
+    .limit(50));
 
   const results = await Promise.allSettled(
     candidates.map(async (candidate) => {
@@ -268,10 +268,12 @@ export async function updateCandidateSnapshot(
 export async function updateCandidateSnapshots(
   inputs: Array<{ id: string; snapshot: LdxpListingSnapshot }>,
 ): Promise<number> {
-  const snapshots = inputs.map(({ id, snapshot }) => ({
-    id,
-    snapshot: ldxpListingSnapshotSchema.parse(snapshot),
-  }));
+  const snapshots = [
+    ...new Map(inputs.map(({ id, snapshot }) => [
+      id,
+      { id, snapshot: ldxpListingSnapshotSchema.parse(snapshot) },
+    ])).values(),
+  ];
   if (snapshots.length === 0) return 0;
 
   const db = getDatabase();
@@ -349,13 +351,13 @@ async function postLdxp(
 
 export async function getDashboardCounts() {
   const db = getDatabase();
-  const [counts] = await db
+  const [counts] = await withDatabaseRetry(() => db
     .select({
       candidates: sql<number>`(select count(*)::int from ${discoveryCandidates})`,
       merchants: sql<number>`(select count(distinct ${discoveryCandidates.extractionResult} ->> 'merchantName')::int from ${discoveryCandidates} where ${discoveryCandidates.status} = 'APPROVED')`,
       listings: sql<number>`(select count(*)::int from ${discoveryCandidates} where ${discoveryCandidates.status} = 'APPROVED')`,
     })
-    .from(sql`(select 1) as singleton`);
+    .from(sql`(select 1) as singleton`));
   return {
     candidates: Number(counts?.candidates ?? 0),
     merchants: Number(counts?.merchants ?? 0),
@@ -365,7 +367,7 @@ export async function getDashboardCounts() {
 
 export async function listMerchantViews() {
   const db = getDatabase();
-  const rows = await db
+  const rows = await withDatabaseRetry(() => db
     .select({
       id: merchants.id,
       name: merchants.name,
@@ -377,7 +379,7 @@ export async function listMerchantViews() {
     })
     .from(merchants)
     .leftJoin(listings, eq(listings.merchantId, merchants.id))
-    .groupBy(merchants.id);
+    .groupBy(merchants.id));
   return rows.map((merchant) => ({
     ...merchant,
     platform: merchant.platform ?? "—",
@@ -388,7 +390,7 @@ export async function listMerchantViews() {
 
 export async function listSpecViews() {
   const db = getDatabase();
-  return db
+  return withDatabaseRetry(() => db
     .select({
       id: productSpecs.id,
       provider: productSpecs.provider,
@@ -402,12 +404,12 @@ export async function listSpecViews() {
       commitment: productSpecs.commitment,
       comparisonKey: productSpecs.comparisonKey,
     })
-    .from(productSpecs);
+    .from(productSpecs));
 }
 
 export async function listSourceViews() {
   const db = getDatabase();
-  const rows = await db.select().from(watchSources);
+  const rows = await withDatabaseRetry(() => db.select().from(watchSources));
   return rows.map((source) => {
     const result = isRecord(source.lastRunResult) ? source.lastRunResult : {};
     return {

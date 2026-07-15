@@ -342,6 +342,7 @@ describe("admin read model", () => {
     await expect(updateCandidateSnapshots([
       { id: "candidate-1", snapshot },
       { id: "candidate-2", snapshot },
+      { id: "candidate-1", snapshot },
     ])).resolves.toBe(2);
     expect(transaction).toHaveBeenCalledTimes(1);
     expect(returning).toHaveBeenCalledTimes(2);

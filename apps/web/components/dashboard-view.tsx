@@ -226,6 +226,7 @@ async function persistCandidateSnapshots(
       "x-csrf-token": readCsrfToken(),
     },
     body: JSON.stringify({ snapshots }),
+    signal: AbortSignal.timeout(15_000),
   });
   if (!response.ok) throw new Error(`WRITE_HTTP_${response.status}`);
   const result = await response.json() as { updated?: unknown };

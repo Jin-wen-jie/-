@@ -84,6 +84,8 @@ export default function CandidatesClient({
       setCandidates((current) =>
         current.map((candidate) => refreshedById.get(candidate.id) ?? candidate)
       );
+    } catch {
+      setError("自动同步暂时失败，当前数据仍可继续审核。");
     } finally {
       syncRunningRef.current = false;
     }
@@ -94,6 +96,7 @@ export default function CandidatesClient({
     try {
       const res = await fetch(
         `/api/candidates?page=${nextPage}&pageSize=${pageSize}`,
+        { signal: AbortSignal.timeout(15_000) },
       );
       const data = (await res.json()) as Partial<CandidatePage> & {
         error?: string;
@@ -125,6 +128,7 @@ export default function CandidatesClient({
           "x-csrf-token": readCsrfToken(),
         },
         body: JSON.stringify({ productUrl: newUrl }),
+        signal: AbortSignal.timeout(15_000),
       });
       const result = (await response.json()) as { error?: string };
       if (!response.ok) throw new Error(result.error ?? "添加失败");
@@ -158,6 +162,7 @@ export default function CandidatesClient({
           "x-csrf-token": readCsrfToken(),
         },
         body: JSON.stringify({ action }),
+        signal: AbortSignal.timeout(15_000),
       });
       const result = (await response.json()) as {
         error?: string;
@@ -389,6 +394,7 @@ async function persistCandidateSnapshots(
       "x-csrf-token": readCsrfToken(),
     },
     body: JSON.stringify({ snapshots }),
+    signal: AbortSignal.timeout(15_000),
   });
   if (!response.ok) throw new Error(`WRITE_HTTP_${response.status}`);
 }
