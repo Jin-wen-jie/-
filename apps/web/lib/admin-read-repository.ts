@@ -1,4 +1,4 @@
-import { and, desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
 import {
   discoveryCandidates,
@@ -153,7 +153,7 @@ export async function refreshApprovedCandidatePrices(): Promise<{
   const results = await Promise.allSettled(
     candidates.map(async (candidate) => {
       const snapshot = await fetchLdxpListingSnapshot(candidate.productUrl);
-      return updateApprovedCandidateSnapshot(candidate.id, snapshot);
+      return updateCandidateSnapshot(candidate.id, snapshot);
     }),
   );
 
@@ -176,7 +176,7 @@ export async function refreshApprovedCandidatePrices(): Promise<{
   };
 }
 
-export async function updateApprovedCandidateSnapshot(
+export async function updateCandidateSnapshot(
   id: string,
   snapshotInput: LdxpListingSnapshot,
 ): Promise<boolean> {
@@ -188,7 +188,11 @@ export async function updateApprovedCandidateSnapshot(
     .where(
       and(
         eq(discoveryCandidates.id, id),
-        eq(discoveryCandidates.status, "APPROVED"),
+        inArray(discoveryCandidates.status, [
+          "DISCOVERED",
+          "REVIEW_REQUIRED",
+          "APPROVED",
+        ]),
       ),
     )
     .limit(1);
@@ -211,7 +215,11 @@ export async function updateApprovedCandidateSnapshot(
     .where(
       and(
         eq(discoveryCandidates.id, id),
-        eq(discoveryCandidates.status, "APPROVED"),
+        inArray(discoveryCandidates.status, [
+          "DISCOVERED",
+          "REVIEW_REQUIRED",
+          "APPROVED",
+        ]),
       ),
     )
     .returning({ id: discoveryCandidates.id });

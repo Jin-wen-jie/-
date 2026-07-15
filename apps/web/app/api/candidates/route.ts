@@ -6,7 +6,7 @@ import {
 } from "../../../lib/candidate-repository";
 import {
   ldxpListingSnapshotSchema,
-  updateApprovedCandidateSnapshot,
+  updateCandidateSnapshot,
 } from "../../../lib/admin-read-repository";
 import {
   assertAdminMutation,
@@ -77,7 +77,7 @@ export async function PUT(request: Request) {
     return NextResponse.json({ error: "INVALID_PRICE_SNAPSHOT" }, { status: 400 });
   }
 
-  const updated = await updateApprovedCandidateSnapshot(
+  const updated = await updateCandidateSnapshot(
     body.data.id,
     body.data.snapshot,
   );

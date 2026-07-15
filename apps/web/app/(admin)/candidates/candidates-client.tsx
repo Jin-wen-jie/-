@@ -23,6 +23,9 @@ interface CandidatePage {
   total: number;
 }
 
+const PRICE_SYNC_INTERVAL_MS = 5 * 60 * 1_000;
+const PRICE_SYNC_CONCURRENCY = 4;
+
 function readCsrfToken(): string {
   for (const name of ["__Host-admin_csrf", "admin_csrf"]) {
     const prefix = `${name}=`;
@@ -51,16 +54,38 @@ export default function CandidatesClient({
     () => new Set(),
   );
   const [error, setError] = useState("");
+  const candidatesRef = useRef(initialPage.items);
+  const syncRunningRef = useRef(false);
 
   useEffect(() => {
-    let cancelled = false;
-    void enrichMerchantUrls(initialPage.items).then((items) => {
-      if (!cancelled) setCandidates(items);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [initialPage.items]);
+    candidatesRef.current = candidates;
+  }, [candidates]);
+
+  useEffect(() => {
+    void synchronizeCandidates();
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === "visible") {
+        void synchronizeCandidates();
+      }
+    }, PRICE_SYNC_INTERVAL_MS);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  async function synchronizeCandidates(items = candidatesRef.current) {
+    if (syncRunningRef.current) return;
+    syncRunningRef.current = true;
+    try {
+      const refreshed = await syncCandidatePrices(items);
+      const refreshedById = new Map(
+        refreshed.map((candidate) => [candidate.id, candidate]),
+      );
+      setCandidates((current) =>
+        current.map((candidate) => refreshedById.get(candidate.id) ?? candidate)
+      );
+    } finally {
+      syncRunningRef.current = false;
+    }
+  }
 
   async function fetchCandidates(nextPage = page) {
     setLoading(true);
@@ -74,7 +99,9 @@ export default function CandidatesClient({
       if (!res.ok || !Array.isArray(data.items)) {
         throw new Error(data.error ?? "加载失败");
       }
-      setCandidates(await enrichMerchantUrls(data.items));
+      setCandidates(data.items);
+      candidatesRef.current = data.items;
+      void synchronizeCandidates(data.items);
       setPage(data.page ?? nextPage);
       setTotal(data.total ?? 0);
       setError("");
@@ -200,38 +227,121 @@ export default function CandidatesClient({
   );
 }
 
-async function enrichMerchantUrls(items: Candidate[]): Promise<Candidate[]> {
-  return Promise.all(
-    items.map(async (candidate) => {
-      if (candidate.merchantUrl) return candidate;
-      const goodsKey = ldxpGoodsKey(candidate.productUrl);
-      if (!goodsKey) return candidate;
+async function syncCandidatePrices(items: Candidate[]): Promise<Candidate[]> {
+  const refreshed: Candidate[] = [];
+  for (let index = 0; index < items.length; index += PRICE_SYNC_CONCURRENCY) {
+    refreshed.push(
+      ...await Promise.all(
+        items.slice(index, index + PRICE_SYNC_CONCURRENCY).map(
+          syncCandidatePrice,
+        ),
+      ),
+    );
+  }
+  return refreshed;
+}
 
-      try {
-        const response = await fetch(
-          "https://www.ldxp.cn/shopApi/Shop/goodsInfo",
-          {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({ goods_key: goodsKey, trade_no: null }),
-            credentials: "omit",
-            signal: AbortSignal.timeout(10_000),
-          },
-        );
-        if (!response.ok) return candidate;
-        const payload = await response.json() as unknown;
-        const root = recordValue(payload);
-        const data = recordValue(root.data);
-        const user = recordValue(data.user);
-        const merchantUrl = verifiedLdxpMerchantUrl(user.link);
-        return root.code === 1 && data.goods_key === goodsKey && merchantUrl
-          ? { ...candidate, merchantUrl }
-          : candidate;
-      } catch {
-        return candidate;
-      }
-    }),
-  );
+async function syncCandidatePrice(candidate: Candidate): Promise<Candidate> {
+  const goodsKey = ldxpGoodsKey(candidate.productUrl);
+  if (!goodsKey) return candidate;
+
+  try {
+    const goodsRoot = await postLdxp("/shopApi/Shop/goodsInfo", {
+      goods_key: goodsKey,
+      trade_no: null,
+    });
+    const goods = recordValue(goodsRoot.data);
+    const user = recordValue(goods.user);
+    if (
+      goodsRoot.code !== 1 ||
+      goods.goods_key !== goodsKey ||
+      typeof goods.name !== "string" ||
+      typeof goods.price !== "number" ||
+      typeof goods.status !== "number" ||
+      typeof user.nickname !== "string" ||
+      typeof user.token !== "string"
+    ) return candidate;
+
+    const channelRoot = await postLdxp("/shopApi/Shop/getUserChannel", {
+      token: user.token,
+    });
+    const channels = Array.isArray(channelRoot.data) ? channelRoot.data : [];
+    const firstChannel = recordValue(channels[0]);
+    const channelId = typeof firstChannel.id === "number" ? firstChannel.id : 0;
+    const priceRoot = await postLdxp("/shopApi/Shop/getGoodsPrice", {
+      goods_key: goodsKey,
+      quantity: 1,
+      coupon_code: "",
+      channel_id: channelId,
+    });
+    const checkout = recordValue(priceRoot.data);
+    if (
+      priceRoot.code !== 1 ||
+      typeof checkout.original_amount !== "number" ||
+      typeof checkout.total_amount !== "number"
+    ) return candidate;
+
+    const merchantUrl = verifiedLdxpMerchantUrl(user.link) ??
+      candidate.merchantUrl;
+    const observedAt = new Date().toISOString();
+    const refreshed = {
+      ...candidate,
+      title: goods.name,
+      price: String(goods.price),
+      merchantName: user.nickname,
+      merchantUrl,
+      availability: goods.status === 1 ? "IN_STOCK" : "OUT_OF_STOCK",
+      observedAt,
+    };
+    if (merchantUrl) {
+      await persistCandidateSnapshot(candidate.id, {
+        price: goods.price,
+        totalPrice: checkout.total_amount,
+        mandatoryFee: Math.max(
+          0,
+          Math.round((checkout.total_amount - checkout.original_amount) * 100) /
+            100,
+        ),
+        pageTitle: goods.name,
+        merchantName: user.nickname,
+        merchantUrl,
+        availability: refreshed.availability,
+      });
+    }
+    return refreshed;
+  } catch {
+    return candidate;
+  }
+}
+
+async function postLdxp(
+  path: string,
+  body: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const response = await fetch(`https://www.ldxp.cn${path}`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+    credentials: "omit",
+    signal: AbortSignal.timeout(10_000),
+  });
+  if (!response.ok) throw new Error(`LDXP_HTTP_${response.status}`);
+  return recordValue(await response.json());
+}
+
+async function persistCandidateSnapshot(
+  id: string,
+  snapshot: Record<string, unknown>,
+): Promise<void> {
+  const response = await fetch("/api/candidates", {
+    method: "PUT",
+    headers: {
+      "content-type": "application/json",
+      "x-csrf-token": readCsrfToken(),
+    },
+    body: JSON.stringify({ id, snapshot }),
+  });
+  if (!response.ok) throw new Error(`WRITE_HTTP_${response.status}`);
 }
 
 function ldxpGoodsKey(productUrl: string): string | null {

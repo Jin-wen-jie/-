@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { PgDialect } from "drizzle-orm/pg-core";
 
 const mocks = vi.hoisted(() => ({
   getDatabase: vi.fn(),
@@ -15,6 +16,7 @@ import {
 import {
   fetchLdxpListingSnapshot,
   getDashboardCounts,
+  updateCandidateSnapshot,
 } from "./admin-read-repository.js";
 
 describe("admin read model", () => {
@@ -53,7 +55,8 @@ describe("admin read model", () => {
       price: "CNY 120.00",
       totalCny: "¥120.00",
       unitCny: "¥60.00/份",
-      supplyEvidence: "IN_STOCK · 库存 8",
+      supplyEvidence: "有货 · 库存 8",
+      availability: "IN_STOCK",
       confidence: 90,
       lastVerified: "2026-07-12T00:00:00.000Z",
       productUrl: "https://shop.example/item/1",
@@ -85,12 +88,31 @@ describe("admin read model", () => {
       price: "CNY 0.85",
       totalCny: "¥0.85",
       unitCny: "¥0.85/件",
-      supplyEvidence: "IN_STOCK · 库存 12",
+      supplyEvidence: "有货 · 库存 12",
+      availability: "IN_STOCK",
       productUrl: "https://shop.example/item/1",
       sourceUrl: "https://source.example/post/1",
       merchantUrl: null,
       lastVerified: "2026-07-14T19:25:00.000Z",
     });
+  });
+
+  it("maps unavailable and missing stock claims to clear dashboard states", () => {
+    const base = {
+      id: "candidate-stock",
+      productUrl: "https://shop.example/item/stock",
+      eventSourceUrl: null,
+      createdAt: new Date("2026-07-15T00:00:00.000Z"),
+    };
+
+    expect(toApprovedCandidateRankingView({
+      ...base,
+      extractionResult: { availability: "UNAVAILABLE" },
+    })).toMatchObject({ availability: "OUT_OF_STOCK", supplyEvidence: "无货" });
+    expect(toApprovedCandidateRankingView({
+      ...base,
+      extractionResult: {},
+    })).toMatchObject({ availability: "UNKNOWN", supplyEvidence: "待核验" });
   });
 
   it("uses the mandatory checkout total as the effective unit price", () => {
@@ -171,6 +193,57 @@ describe("admin read model", () => {
         }),
       }),
     );
+  });
+
+  it("updates live snapshots only for reviewable or approved candidates", async () => {
+    const selectLimit = vi.fn().mockResolvedValue([{ extractionResult: {} }]);
+    const selectQuery = {
+      from: vi.fn(),
+      where: vi.fn(),
+      limit: selectLimit,
+    };
+    selectQuery.from.mockReturnValue(selectQuery);
+    selectQuery.where.mockReturnValue(selectQuery);
+
+    let updateCondition: { getSQL(): unknown } | undefined;
+    const returning = vi.fn().mockResolvedValue([{ id: "candidate-1" }]);
+    const updateQuery = {
+      set: vi.fn(),
+      where: vi.fn((condition: { getSQL(): unknown }) => {
+        updateCondition = condition;
+        return updateQuery;
+      }),
+      returning,
+    };
+    updateQuery.set.mockReturnValue(updateQuery);
+    mocks.getDatabase.mockReturnValue({
+      select: vi.fn().mockReturnValue(selectQuery),
+      update: vi.fn().mockReturnValue(updateQuery),
+    });
+
+    await expect(
+      updateCandidateSnapshot("candidate-1", {
+        price: 1.4,
+        totalPrice: 1.44,
+        mandatoryFee: 0.04,
+        pageTitle: "K12 商品",
+        merchantName: "公开商铺",
+        merchantUrl: "https://pay.ldxp.cn/shop/SHOP1",
+        availability: "IN_STOCK",
+      }),
+    ).resolves.toBe(true);
+    expect(updateCondition).toBeDefined();
+    if (!updateCondition) throw new Error("update condition was not captured");
+    const query = new PgDialect().sqlToQuery(updateCondition.getSQL() as never);
+    expect(query.params).toEqual(
+      expect.arrayContaining([
+        "candidate-1",
+        "DISCOVERED",
+        "REVIEW_REQUIRED",
+        "APPROVED",
+      ]),
+    );
+    expect(query.params).not.toContain("REJECTED");
   });
 
   it("counts dashboard records in PostgreSQL without loading every row", async () => {
