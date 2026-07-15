@@ -12,7 +12,7 @@ import {
   toApprovedCandidateRankingView,
   type RankingView,
 } from "./admin-read-model";
-import { getDatabase } from "./database";
+import { getDatabase, withDatabaseRetry } from "./database";
 
 export async function listRankingViews(limit = 200): Promise<RankingView[]> {
   const db = getDatabase();
@@ -275,7 +275,7 @@ export async function updateCandidateSnapshots(
   if (snapshots.length === 0) return 0;
 
   const db = getDatabase();
-  return db.transaction(async (tx) => {
+  return withDatabaseRetry(() => db.transaction(async (tx) => {
     const ids = [...new Set(snapshots.map(({ id }) => id))];
     const candidates = await tx
       .select({
@@ -328,7 +328,7 @@ export async function updateCandidateSnapshots(
     }
 
     return updated;
-  });
+  }));
 }
 
 async function postLdxp(

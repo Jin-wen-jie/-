@@ -13,7 +13,7 @@ import {
   toCandidateView,
   type CandidateView,
 } from "./candidate-service";
-import { getDatabase } from "./database";
+import { getDatabase, withDatabaseRetry } from "./database";
 
 export interface CandidatePage {
   items: CandidateView[];
@@ -26,6 +26,13 @@ export async function listCandidates(options: {
   page?: number;
   pageSize?: number;
 } = {}): Promise<CandidatePage> {
+  return withDatabaseRetry(() => listCandidatesOnce(options));
+}
+
+async function listCandidatesOnce(options: {
+  page?: number;
+  pageSize?: number;
+}): Promise<CandidatePage> {
   const db = getDatabase();
   const requestedPage = options.page ?? 1;
   const requestedPageSize = options.pageSize ?? 50;
@@ -80,7 +87,7 @@ export async function listCandidates(options: {
     .offset((page - 1) * pageSize);
 
   if (rows.length === 0 && page > 1) {
-    return listCandidates({ page: 1, pageSize });
+    return listCandidatesOnce({ page: 1, pageSize });
   }
 
   return {

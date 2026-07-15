@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("./database", () => ({
   getDatabase: mocks.getDatabase,
+  withDatabaseRetry: <T>(operation: () => Promise<T>) => operation(),
 }));
 
 import {

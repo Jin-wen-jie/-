@@ -39,12 +39,12 @@ describe("web database configuration", () => {
     );
   });
 
-  it("keeps transaction-pooler sessions available for warm requests", async () => {
+  it("retires idle transaction-pooler sessions quickly", async () => {
     await getDatabaseForUrl("postgres://user:pass@aws-0-ap-southeast-1.pooler.supabase.com:6543/postgres");
 
     expect(mocks.createDb).toHaveBeenCalledWith(
       "postgres://user:pass@aws-0-ap-southeast-1.pooler.supabase.com:6543/postgres",
-      { maxConnections: 1 },
+      { maxConnections: 1, idleTimeoutSeconds: 5 },
     );
   });
 
@@ -55,5 +55,23 @@ describe("web database configuration", () => {
       "postgres://postgres:pass@localhost:5432/compare",
       { maxConnections: 4, idleTimeoutSeconds: 20 },
     );
+  });
+
+  it("retries transient connection-pool failures", async () => {
+    vi.useFakeTimers();
+    try {
+      const { withDatabaseRetry } = await import("./database.js");
+      const operation = vi.fn()
+        .mockRejectedValueOnce(new Error("max clients reached"))
+        .mockResolvedValueOnce("ok");
+
+      const result = withDatabaseRetry(operation);
+      await vi.runAllTimersAsync();
+
+      await expect(result).resolves.toBe("ok");
+      expect(operation).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
