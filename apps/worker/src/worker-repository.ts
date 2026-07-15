@@ -56,6 +56,19 @@ export function mergeCandidateExtraction(
   };
 }
 
+export const K12_MAX_EFFECTIVE_PRICE_CNY = 1.2;
+
+export function isK12AbovePriceLimit(
+  extraction: Record<string, unknown>,
+): boolean {
+  if (extraction.focus !== "K12") return false;
+  const totalPrice = positiveNumber(extraction.totalPrice);
+  const price = positiveNumber(extraction.price);
+  const effectivePrice = totalPrice ?? price;
+  return effectivePrice !== null &&
+    effectivePrice > K12_MAX_EFFECTIVE_PRICE_CNY;
+}
+
 export interface WorkerRepositoryRuntime extends WorkerRepository {
   savePublicSearchRun: (
     result: PublicSearchResult,
@@ -154,16 +167,21 @@ export function createWorkerRepositoryFromDb(
           .limit(1);
         if (!candidate) return { saved: false, discoveredIds: [] };
 
+        const extractionResult = mergeCandidateExtraction(
+          candidate.extractionResult,
+          result,
+          observedAt,
+        );
+        const exceedsK12PriceLimit = isK12AbovePriceLimit(extractionResult);
         const [updated] = await tx
           .update(discoveryCandidates)
           .set({
             finalUrl: result.finalUrl,
-            status: "REVIEW_REQUIRED",
-            extractionResult: mergeCandidateExtraction(
-              candidate.extractionResult,
-              result,
-              observedAt,
-            ),
+            status: exceedsK12PriceLimit ? "REJECTED" : "REVIEW_REQUIRED",
+            rejectionReason: exceedsK12PriceLimit
+              ? "K12_PRICE_ABOVE_LIMIT"
+              : null,
+            extractionResult,
             updatedAt: observedAt,
           })
           .where(ownership)
@@ -402,6 +420,15 @@ export function createWorkerRepositoryFromDb(
       });
     },
   };
+}
+
+function positiveNumber(value: unknown): number | null {
+  const parsed = typeof value === "number"
+    ? value
+    : typeof value === "string" && value.trim() !== ""
+    ? Number(value)
+    : Number.NaN;
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
 }
 
 function publicSearchStatus(

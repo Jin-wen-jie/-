@@ -487,7 +487,27 @@ export const INITIAL_CANDIDATES: CandidateSeed[] = ALL_RESEARCH_CANDIDATES
       ...candidate.extractionResult,
       ...LIVE_LOW_PRICE_EVIDENCE[candidate.productUrl],
     },
-  }));
+  }))
+  .filter((candidate) => !isK12AbovePriceLimit(candidate.extractionResult));
+
+function isK12AbovePriceLimit(
+  extraction: Record<string, unknown> | undefined,
+): boolean {
+  if (extraction?.focus !== "K12") return false;
+  const totalPrice = positiveNumber(extraction.totalPrice);
+  const price = positiveNumber(extraction.price);
+  const effectivePrice = totalPrice ?? price;
+  return effectivePrice !== null && effectivePrice > 1.2;
+}
+
+function positiveNumber(value: unknown): number | null {
+  const parsed = typeof value === "number"
+    ? value
+    : typeof value === "string" && value.trim() !== ""
+    ? Number(value)
+    : Number.NaN;
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
 
 /**
  * 已知的发卡平台域名。

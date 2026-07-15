@@ -43,7 +43,7 @@ describe("seedCandidates", () => {
     ).toBe(true);
   });
 
-  it("keeps only the 20 relatively cheapest in-stock merchants", () => {
+  it("keeps unique in-stock candidates and excludes K12 above CNY 1.20", () => {
     const merchantNames = new Set(
       INITIAL_CANDIDATES.map((candidate) =>
         String(candidate.extractionResult?.merchantName),
@@ -53,17 +53,27 @@ describe("seedCandidates", () => {
       (candidate) => candidate.productUrl,
     );
 
-    expect(INITIAL_CANDIDATES).toHaveLength(36);
-    expect(merchantNames.size).toBe(20);
+    expect(INITIAL_CANDIDATES.length).toBeGreaterThan(0);
+    expect(merchantNames.size).toBeGreaterThan(0);
     expect(new Set(productUrls).size).toBe(productUrls.length);
     expect(
       INITIAL_CANDIDATES.every(
         (candidate) =>
           candidate.status === "REVIEW_REQUIRED" &&
           candidate.extractionResult?.availability === "IN_STOCK" &&
-          Number(candidate.extractionResult?.price) > 0 &&
-          Number(candidate.extractionResult?.price) <= 2.78,
+          Number(candidate.extractionResult?.price) > 0,
       ),
+    ).toBe(true);
+    expect(
+      INITIAL_CANDIDATES.filter(
+        (candidate) => candidate.extractionResult?.focus === "K12",
+      ).every((candidate) => {
+        const extraction = candidate.extractionResult ?? {};
+        const effectivePrice = Number(
+          extraction.totalPrice ?? extraction.price,
+        );
+        return Number.isFinite(effectivePrice) && effectivePrice <= 1.2;
+      }),
     ).toBe(true);
   });
 

@@ -10,6 +10,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   createWorkerRepository,
   createWorkerRepositoryFromDb,
+  isK12AbovePriceLimit,
   mergeCandidateExtraction,
 } from "./worker-repository.js";
 import type { ValidatorResponse } from "./validator-client.js";
@@ -42,6 +43,37 @@ vi.mock("@compare/db", async (importOriginal) => {
 });
 
 describe("worker repository mappings", () => {
+  it.each([
+    [{ focus: "K12", totalPrice: "1.21", price: "1.00" }, true],
+    [{ focus: "K12", totalPrice: 1.2, price: "9.00" }, false],
+    [{ focus: "K12", price: "1.21" }, true],
+    [{ focus: "Bug Team", totalPrice: 99 }, false],
+  ] as const)(
+    "applies the K12 price limit to effective price %#",
+    (extraction, expected) => {
+      expect(isK12AbovePriceLimit({ ...extraction })).toBe(expected);
+    },
+  );
+
+  it("rejects a validated K12 candidate above CNY 1.20", async () => {
+    const harness = createCandidateSaveHarness(
+      undefined,
+      { focus: "K12", totalPrice: "1.21" },
+    );
+    const repository = createWorkerRepositoryFromDb(harness.db);
+
+    await expect(repository.saveCandidateValidation(
+      "candidate-1",
+      repositoryValidationResult,
+      new Date("2026-07-13T00:00:00.000Z"),
+    )).resolves.toMatchObject({ saved: true });
+
+    expect(harness.set).toHaveBeenCalledWith(expect.objectContaining({
+      status: "REJECTED",
+      rejectionReason: "K12_PRICE_ABOVE_LIMIT",
+    }));
+  });
+
   it("claims candidates with one conditional update returning the winner", async () => {
     const returning = vi.fn().mockResolvedValue([{
       id: "candidate-1",
@@ -510,8 +542,9 @@ describe("public search persistence", () => {
 
 function createCandidateSaveHarness(
   discoveryReturning = vi.fn().mockResolvedValue([]),
+  extractionResult: Record<string, unknown> = {},
 ) {
-  const limit = vi.fn().mockResolvedValue([{ extractionResult: {} }]);
+  const limit = vi.fn().mockResolvedValue([{ extractionResult }]);
   const selectWhere = vi.fn().mockReturnValue({ limit });
   const from = vi.fn().mockReturnValue({ where: selectWhere });
   const select = vi.fn().mockReturnValue({ from });
@@ -534,7 +567,7 @@ function createCandidateSaveHarness(
       operation: (transaction: typeof tx) => Promise<unknown>,
     ) => operation(tx)),
   } as unknown as Db;
-  return { db, discoveryValues, onConflictDoNothing };
+  return { db, discoveryValues, onConflictDoNothing, set };
 }
 
 function validationWithPlatformLinks(platformLinks: string[]): ValidatorResponse {

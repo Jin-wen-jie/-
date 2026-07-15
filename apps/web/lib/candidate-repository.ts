@@ -36,6 +36,14 @@ export async function listCandidates(options: {
     ? Math.min(100, Math.max(1, Math.floor(requestedPageSize)))
     : 50;
   const focus = sql<string | null>`${discoveryCandidates.extractionResult} ->> 'focus'`;
+  const totalPriceText = sql<string | null>`${discoveryCandidates.extractionResult} ->> 'totalPrice'`;
+  const priceText = sql<string | null>`${discoveryCandidates.extractionResult} ->> 'price'`;
+  const effectivePrice = sql<number | null>`coalesce(
+    case when ${totalPriceText} ~ '^[0-9]+([.][0-9]+)?$'
+      then nullif(${totalPriceText}::numeric, 0) end,
+    case when ${priceText} ~ '^[0-9]+([.][0-9]+)?$'
+      then nullif(${priceText}::numeric, 0) end
+  )`;
   const rows = await db
     .select({
       id: discoveryCandidates.id,
@@ -61,6 +69,7 @@ export async function listCandidates(options: {
           "REVIEW_REQUIRED",
         ]),
         sql`(${focus} is null or ${focus} in ('K12', 'Bug Team'))`,
+        sql`(${focus} is distinct from 'K12' or ${effectivePrice} is null or ${effectivePrice} <= ${1.2})`,
       ),
     )
     .orderBy(

@@ -50,6 +50,11 @@ describe("candidate repository listing", () => {
     expect(sqlQuery.params).not.toEqual(
       expect.arrayContaining(["APPROVED", "REJECTED"]),
     );
+    expect(sqlQuery.params).toContain(1.2);
+    expect(sqlQuery.sql).toContain("K12");
+    expect(sqlQuery.sql).toContain("Bug Team");
+    expect(sqlQuery.sql).toContain("totalPrice");
+    expect(sqlQuery.sql).toContain("price");
   });
 });
 
