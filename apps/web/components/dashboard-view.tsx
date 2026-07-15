@@ -13,8 +13,6 @@ const priceColumns: Column<RankingView>[] = [
   { key: "spec", header: "规格", render: (row) => <span className="text-xs text-gray-800">{row.spec}</span> },
   { key: "merchant", header: "商家", render: (row) => <span className="text-xs font-semibold text-gray-900">{row.merchant}</span> },
   { key: "availability", header: "库存", render: (row) => <AvailabilityBadge availability={row.availability} /> },
-  { key: "price", header: "原价", render: (row) => <span className="font-mono text-xs text-gray-700">{row.price}</span> },
-  { key: "totalCny", header: "总支出", render: (row) => <span className="font-mono text-xs font-semibold text-gray-900">{row.totalCny}</span> },
   { key: "product", header: "商品页", render: (row) => <ExternalLink href={row.productUrl}>打开</ExternalLink> },
   { key: "source", header: "公开来源", render: (row) => row.sourceUrl ? <ExternalLink href={row.sourceUrl}>来源</ExternalLink> : <span className="text-xs text-gray-500">手工</span> },
   { key: "verified", header: "最后成功核验", render: (row) => <span className="text-xs text-gray-600">{new Date(row.lastVerified).toLocaleString("zh-CN")}</span> },
@@ -75,11 +73,12 @@ export function DashboardView({
   useEffect(() => {
     let stopped = false;
     let running = false;
-    const refreshPrices = async () => {
+    const refreshPrices = async (force = false) => {
       if (running || document.visibilityState !== "visible") return;
       running = true;
       const targets = rowsRef.current.filter(
         (row) =>
+          force ||
           Date.now() - new Date(row.lastVerified).getTime() >=
             LIVE_REFRESH_INTERVAL_MS,
       );
@@ -106,8 +105,11 @@ export function DashboardView({
         router.refresh();
       }
     };
-    void refreshPrices();
-    const timer = window.setInterval(refreshPrices, LIVE_REFRESH_INTERVAL_MS);
+    void refreshPrices(true);
+    const timer = window.setInterval(
+      () => void refreshPrices(),
+      LIVE_REFRESH_INTERVAL_MS,
+    );
     return () => {
       stopped = true;
       window.clearInterval(timer);
