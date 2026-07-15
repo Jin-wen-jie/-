@@ -82,13 +82,13 @@ describe("seedCandidates", () => {
       (channel) => channel.channelUrl,
     );
 
-    expect(PUBLIC_RESEARCH_CHANNELS).toHaveLength(57);
+    expect(PUBLIC_RESEARCH_CHANNELS.length).toBeGreaterThanOrEqual(100);
     expect(new Set(channelUrls).size).toBe(channelUrls.length);
     expect(
       PUBLIC_RESEARCH_CHANNELS.filter(
         (channel) => channel.status === "VERIFIED_PRODUCT",
       ).length,
-    ).toBeGreaterThan(30);
+    ).toBeGreaterThanOrEqual(100);
     expect(
       PUBLIC_RESEARCH_CHANNELS.some((channel) => channel.status === "RECHECK"),
     ).toBe(true);
