@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { ChevronLeft, ChevronRight, LoaderCircle } from "lucide-react";
 import { DataTable } from "../../../components/data-table";
 import { ExternalLink } from "../../../components/external-link";
@@ -46,7 +46,10 @@ export default function CandidatesClient({
   const [loading, setLoading] = useState(false);
   const [newUrl, setNewUrl] = useState("");
   const [adding, setAdding] = useState(false);
-  const [reviewingId, setReviewingId] = useState<string | null>(null);
+  const reviewingIdsRef = useRef(new Set<string>());
+  const [reviewingIds, setReviewingIds] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
   const [error, setError] = useState("");
 
   async function fetchCandidates(nextPage = page) {
@@ -96,13 +99,14 @@ export default function CandidatesClient({
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
 
   async function handleReview(id: string, action: "approve" | "reject") {
-    if (reviewingId) return;
+    if (reviewingIdsRef.current.has(id)) return;
     const previousStatus = candidates.find((candidate) => candidate.id === id)?.status;
     if (!previousStatus) return;
     const optimisticStatus = action === "approve" ? "APPROVED" : "REJECTED";
 
     setError("");
-    setReviewingId(id);
+    reviewingIdsRef.current.add(id);
+    setReviewingIds(new Set(reviewingIdsRef.current));
     setCandidates((current) =>
       current.map((candidate) =>
         candidate.id === id
@@ -142,7 +146,8 @@ export default function CandidatesClient({
       );
       setError(cause instanceof Error ? cause.message : "审核失败");
     } finally {
-      setReviewingId(null);
+      reviewingIdsRef.current.delete(id);
+      setReviewingIds(new Set(reviewingIdsRef.current));
     }
   }
 
@@ -156,7 +161,7 @@ export default function CandidatesClient({
     { key: "product", header: "商品页", render: (r) => <ExternalLink href={r.productUrl}>商品页</ExternalLink> },
     { key: "source", header: "发现帖", render: (r) => r.sourceUrl ? <ExternalLink href={r.sourceUrl}>来源帖</ExternalLink> : <span className="text-gray-400">手工录入</span> },
     { key: "merchantLink", header: "店铺", render: (r) => r.merchantUrl ? <ExternalLink href={r.merchantUrl}>店铺</ExternalLink> : <span className="text-gray-400">—</span> },
-    { key: "actions", header: "操作", render: (r) => reviewingId === r.id ? <span className="inline-flex items-center gap-1.5 text-xs font-medium text-gray-600"><LoaderCircle className="h-4 w-4 animate-spin" />保存中</span> : (r.status === "REVIEW_REQUIRED" || r.status === "DISCOVERED") ? <div className="flex gap-1.5"><button onClick={() => handleReview(r.id, "approve")} disabled={reviewingId !== null} className="rounded bg-green-600 px-2.5 py-1 text-xs font-semibold text-white hover:bg-green-700 disabled:cursor-not-allowed disabled:opacity-40">通过</button><button onClick={() => handleReview(r.id, "reject")} disabled={reviewingId !== null} className="rounded bg-red-600 px-2.5 py-1 text-xs font-semibold text-white hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-40">驳回</button></div> : null },
+    { key: "actions", header: "操作", render: (r) => reviewingIds.has(r.id) ? <span className="inline-flex items-center gap-1.5 text-xs font-medium text-gray-600"><LoaderCircle className="h-4 w-4 animate-spin" />保存中</span> : (r.status === "REVIEW_REQUIRED" || r.status === "DISCOVERED") ? <div className="flex gap-1.5"><button onClick={() => handleReview(r.id, "approve")} className="rounded bg-green-600 px-2.5 py-1 text-xs font-semibold text-white hover:bg-green-700">通过</button><button onClick={() => handleReview(r.id, "reject")} className="rounded bg-red-600 px-2.5 py-1 text-xs font-semibold text-white hover:bg-red-700">驳回</button></div> : null },
   ];
 
   return (

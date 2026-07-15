@@ -110,21 +110,12 @@ describe("candidate repository normalization", () => {
 });
 
 describe("candidate repository review", () => {
-  it("approves a candidate without a normalized spec", async () => {
-    const limit = vi.fn().mockResolvedValue([{ id: "candidate-1" }]);
-    const selectQuery = {
-      from: vi.fn(),
-      where: vi.fn(),
-      limit,
-    };
-    selectQuery.from.mockReturnValue(selectQuery);
-    selectQuery.where.mockReturnValue(selectQuery);
-
-    const updateWhere = vi.fn().mockResolvedValue(undefined);
+  it("approves with one conditional update before writing the audit", async () => {
+    const returning = vi.fn().mockResolvedValue([{ id: "candidate-1" }]);
+    const updateWhere = vi.fn().mockReturnValue({ returning });
     const updateSet = vi.fn().mockReturnValue({ where: updateWhere });
     const auditValues = vi.fn().mockResolvedValue(undefined);
     const tx = {
-      select: vi.fn().mockReturnValue(selectQuery),
       update: vi.fn().mockReturnValue({ set: updateSet }),
       insert: vi.fn().mockReturnValue({ values: auditValues }),
     };
@@ -144,11 +135,45 @@ describe("candidate repository review", () => {
     expect(updateSet).toHaveBeenCalledWith(
       expect.objectContaining({ status: "APPROVED" }),
     );
+    const reviewCondition = updateWhere.mock.calls[0]?.[0];
+    expect(reviewCondition).toBeDefined();
+    if (!reviewCondition) throw new Error("review condition was not captured");
+    const reviewQuery = new PgDialect().sqlToQuery(reviewCondition.getSQL());
+    expect(reviewQuery.params).toEqual(
+      expect.arrayContaining([
+        "candidate-1",
+        "DISCOVERED",
+        "REVIEW_REQUIRED",
+      ]),
+    );
     expect(auditValues).toHaveBeenCalledWith(
       expect.objectContaining({
         action: "candidate.approve",
         candidateId: "candidate-1",
       }),
     );
+  });
+
+  it("does not audit a candidate that was already reviewed", async () => {
+    const returning = vi.fn().mockResolvedValue([]);
+    const updateWhere = vi.fn().mockReturnValue({ returning });
+    const auditValues = vi.fn().mockResolvedValue(undefined);
+    const tx = {
+      update: vi.fn().mockReturnValue({
+        set: vi.fn().mockReturnValue({ where: updateWhere }),
+      }),
+      insert: vi.fn().mockReturnValue({ values: auditValues }),
+    };
+    mocks.getDatabase.mockReturnValue({
+      transaction: vi.fn(
+        async (callback: (transaction: typeof tx) => unknown) => callback(tx),
+      ),
+    });
+
+    await expect(
+      reviewCandidate("candidate-1", "reject"),
+    ).resolves.toEqual({ ok: false, reason: "NOT_FOUND" });
+    expect(tx.insert).not.toHaveBeenCalled();
+    expect(auditValues).not.toHaveBeenCalled();
   });
 });

@@ -138,25 +138,27 @@ export async function reviewCandidate(
 ): Promise<ReviewCandidateResult> {
   const db = getDatabase();
   return db.transaction(async (tx) => {
-    const [candidate] = await tx
-      .select({
-        id: discoveryCandidates.id,
-      })
-      .from(discoveryCandidates)
-      .where(eq(discoveryCandidates.id, id))
-      .limit(1);
-    if (!candidate) return { ok: false, reason: "NOT_FOUND" };
-
     const reviewedAt = new Date();
     const status = action === "approve" ? "APPROVED" : "REJECTED";
-    await tx
+    const [candidate] = await tx
       .update(discoveryCandidates)
       .set({
         status,
         rejectionReason: action === "reject" ? reason ?? null : null,
         updatedAt: reviewedAt,
       })
-      .where(eq(discoveryCandidates.id, id));
+      .where(
+        and(
+          eq(discoveryCandidates.id, id),
+          inArray(discoveryCandidates.status, [
+            "DISCOVERED",
+            "REVIEW_REQUIRED",
+          ]),
+        ),
+      )
+      .returning({ id: discoveryCandidates.id });
+    if (!candidate) return { ok: false, reason: "NOT_FOUND" };
+
     await tx.insert(auditEvents).values({
       id: randomUUID(),
       action: `candidate.${action}`,
