@@ -32,6 +32,49 @@ export interface RankingView {
   merchantUrl: string | null;
 }
 
+export interface ApprovedCandidateRankingInput {
+  id: string;
+  productUrl: string;
+  extractionResult: unknown;
+  eventSourceUrl: string | null;
+  createdAt: Date;
+}
+
+export function toApprovedCandidateRankingView(
+  input: ApprovedCandidateRankingInput,
+): RankingView {
+  const extraction = isRecord(input.extractionResult)
+    ? input.extractionResult
+    : {};
+  const price = numericValue(extraction.price);
+  const merchantName = stringValue(extraction.merchantName) ?? "未识别商家";
+  const merchantUrl =
+    stringValue(extraction.merchantUrl) ?? new URL(input.productUrl).origin + "/";
+  const sourceUrl =
+    stringValue(extraction.sourceUrl) ?? input.eventSourceUrl;
+  const focus = stringValue(extraction.focus) ?? "未分类";
+  const availability = stringValue(extraction.availability);
+  const inventory = numberValue(extraction.inventory);
+  const observedAt = validDate(extraction.observedAt) ?? input.createdAt;
+  const evidenceParts = [availability];
+  if (inventory !== null) evidenceParts.push(`库存 ${inventory}`);
+
+  return {
+    id: input.id,
+    spec: focus,
+    merchant: merchantName,
+    price: price === null ? "—" : `CNY ${price.toFixed(2)}`,
+    totalCny: price === null ? "—" : `¥${price.toFixed(2)}`,
+    unitCny: price === null ? "—" : `¥${price.toFixed(2)}/件`,
+    supplyEvidence: evidenceParts.filter(Boolean).join(" · ") || "暂无库存证据",
+    confidence: null,
+    lastVerified: observedAt.toISOString(),
+    productUrl: input.productUrl,
+    sourceUrl,
+    merchantUrl,
+  };
+}
+
 export function toRankingView(input: RankingViewInput): RankingView {
   const total = input.convertedPriceCny === null
     ? null
@@ -84,4 +127,17 @@ function stringValue(value: unknown): string | null {
 
 function numberValue(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function numericValue(value: unknown): number | null {
+  if (typeof value === "number") return Number.isFinite(value) ? value : null;
+  if (typeof value !== "string" || value.trim() === "") return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function validDate(value: unknown): Date | null {
+  if (typeof value !== "string") return null;
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
 }

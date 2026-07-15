@@ -39,7 +39,7 @@ export function DashboardView({
     <div>
       <h2 className="mb-1 text-xl font-bold text-gray-900">K12 / Bug Team 比价总览</h2>
       <p className="mb-4 text-xs text-gray-500">
-        PostgreSQL 事实数据：{counts.candidates} 条候选 · {counts.merchants} 个商家 · {counts.listings} 条商品。仅追踪 K12 教育资格和 Bug Team 类商品。榜单仅包含审核通过、在售且 24 小时内成功核验的记录。
+        PostgreSQL 事实数据：{counts.candidates} 条候选 · {counts.merchants} 个保留商家 · {counts.listings} 条已通过商品。总览直接展示候选审核中点击“通过”的 K12 / Bug Team 商品。
       </p>
       <div className="mb-4 flex gap-2 border-b">
         <button onClick={() => setTab("price")} className={`border-b-2 px-4 py-2 text-sm font-semibold transition-colors ${tab === "price" ? "border-blue-600 text-blue-700" : "border-transparent text-gray-600 hover:text-gray-900"}`}>价格榜</button>

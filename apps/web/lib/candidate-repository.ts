@@ -122,7 +122,7 @@ export async function createManualCandidate(productUrl: string): Promise<{
 }
 
 export type ReviewCandidateResult =
-  | { ok: false; reason: "NOT_FOUND" | "SPEC_INCOMPLETE" }
+  | { ok: false; reason: "NOT_FOUND" }
   | {
       ok: true;
       id: string;
@@ -140,16 +140,12 @@ export async function reviewCandidate(
   return db.transaction(async (tx) => {
     const [candidate] = await tx
       .select({
-        comparisonKey: discoveryCandidates.comparisonKey,
-        specId: discoveryCandidates.specId,
+        id: discoveryCandidates.id,
       })
       .from(discoveryCandidates)
       .where(eq(discoveryCandidates.id, id))
       .limit(1);
     if (!candidate) return { ok: false, reason: "NOT_FOUND" };
-    if (action === "approve" && (!candidate.comparisonKey || !candidate.specId)) {
-      return { ok: false, reason: "SPEC_INCOMPLETE" };
-    }
 
     const reviewedAt = new Date();
     const status = action === "approve" ? "APPROVED" : "REJECTED";

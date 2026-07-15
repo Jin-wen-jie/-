@@ -5,7 +5,6 @@ import { ChevronLeft, ChevronRight, LoaderCircle } from "lucide-react";
 import { DataTable } from "../../../components/data-table";
 import { ExternalLink } from "../../../components/external-link";
 import { StatusBadge } from "../../../components/status-badge";
-import SpecNormalizer from "../../../components/spec-normalizer";
 import type { Column } from "../../../components/data-table";
 
 interface Candidate {
@@ -14,7 +13,7 @@ interface Candidate {
   merchantName: string | null; sourceUrl: string | null; merchantUrl: string;
   focus: string | null; availability: string | null; evidenceNote: string | null;
   observedAt: string | null; sold: number | null; inventory: number | null;
-  canApprove: boolean; createdAt: string;
+  createdAt: string;
 }
 
 interface CandidatePage {
@@ -49,7 +48,6 @@ export default function CandidatesClient({
   const [adding, setAdding] = useState(false);
   const [reviewingId, setReviewingId] = useState<string | null>(null);
   const [error, setError] = useState("");
-  const [normalizingCandidate, setNormalizingCandidate] = useState<Candidate | null>(null);
 
   async function fetchCandidates(nextPage = page) {
     setLoading(true);
@@ -158,7 +156,7 @@ export default function CandidatesClient({
     { key: "product", header: "商品页", render: (r) => <ExternalLink href={r.productUrl}>商品页</ExternalLink> },
     { key: "source", header: "发现帖", render: (r) => r.sourceUrl ? <ExternalLink href={r.sourceUrl}>来源帖</ExternalLink> : <span className="text-gray-400">手工录入</span> },
     { key: "merchantLink", header: "店铺", render: (r) => r.merchantUrl ? <ExternalLink href={r.merchantUrl}>店铺</ExternalLink> : <span className="text-gray-400">—</span> },
-    { key: "actions", header: "操作", render: (r) => reviewingId === r.id ? <span className="inline-flex items-center gap-1.5 text-xs font-medium text-gray-600"><LoaderCircle className="h-4 w-4 animate-spin" />保存中</span> : (r.status === "REVIEW_REQUIRED" || r.status === "DISCOVERED") ? <div className="flex gap-1.5">{!r.canApprove && <button onClick={() => setNormalizingCandidate(r)} disabled={reviewingId !== null} className="rounded bg-blue-600 px-2.5 py-1 text-xs font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-40">规格归一化</button>}<button onClick={() => handleReview(r.id, "approve")} disabled={!r.canApprove || reviewingId !== null} title={r.canApprove ? "通过审核" : "需先完成规格归一化"} className="rounded bg-green-600 px-2.5 py-1 text-xs font-semibold text-white hover:bg-green-700 disabled:cursor-not-allowed disabled:bg-gray-300">通过</button><button onClick={() => handleReview(r.id, "reject")} disabled={reviewingId !== null} className="rounded bg-red-600 px-2.5 py-1 text-xs font-semibold text-white hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-40">驳回</button></div> : null },
+    { key: "actions", header: "操作", render: (r) => reviewingId === r.id ? <span className="inline-flex items-center gap-1.5 text-xs font-medium text-gray-600"><LoaderCircle className="h-4 w-4 animate-spin" />保存中</span> : (r.status === "REVIEW_REQUIRED" || r.status === "DISCOVERED") ? <div className="flex gap-1.5"><button onClick={() => handleReview(r.id, "approve")} disabled={reviewingId !== null} className="rounded bg-green-600 px-2.5 py-1 text-xs font-semibold text-white hover:bg-green-700 disabled:cursor-not-allowed disabled:opacity-40">通过</button><button onClick={() => handleReview(r.id, "reject")} disabled={reviewingId !== null} className="rounded bg-red-600 px-2.5 py-1 text-xs font-semibold text-white hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-40">驳回</button></div> : null },
   ];
 
   return (
@@ -199,16 +197,6 @@ export default function CandidatesClient({
           </button>
         </div>
       </div>
-      {normalizingCandidate && (
-        <SpecNormalizer
-          candidate={normalizingCandidate}
-          onClose={() => setNormalizingCandidate(null)}
-          onNormalized={() => {
-            setNormalizingCandidate(null);
-            fetchCandidates();
-          }}
-        />
-      )}
     </div>
   );
 }

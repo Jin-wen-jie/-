@@ -6,7 +6,6 @@ import {
 } from "../../../lib/candidate-repository";
 import {
   assertAdminMutation,
-  authorizeAdminRequest,
 } from "../../../lib/server-auth";
 
 const createSchema = z.object({
@@ -20,13 +19,6 @@ const createSchema = z.object({
 });
 
 export async function GET(request: Request) {
-  const authorization = await authorizeAdminRequest();
-  if (!authorization.ok) {
-    return NextResponse.json(
-      { error: authorization.error },
-      { status: authorization.status },
-    );
-  }
   const searchParams = new URL(request.url).searchParams;
   return NextResponse.json(
     await listCandidates({

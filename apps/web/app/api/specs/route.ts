@@ -5,19 +5,10 @@ import { productSpecs } from "@compare/db";
 import { getDatabase } from "../../../lib/database";
 import {
   assertAdminMutation,
-  authorizeAdminRequest,
 } from "../../../lib/server-auth";
 import { createSpecSchema } from "../../../lib/specs";
 
 export async function GET() {
-  const authorization = await authorizeAdminRequest();
-  if (!authorization.ok) {
-    return NextResponse.json(
-      { error: authorization.error },
-      { status: authorization.status },
-    );
-  }
-
   const db = getDatabase();
   const specs = await db
     .select({

@@ -16,17 +16,12 @@ const navItems = [
 
 export function AdminShell({
   children,
-  forcePasswordChange,
 }: {
   children: ReactNode;
-  forcePasswordChange: boolean;
 }) {
   const pathname = usePathname();
   const router = useRouter();
   const [pendingHref, setPendingHref] = useState<string | null>(null);
-  const visibleNavItems = forcePasswordChange
-    ? navItems.filter((item) => item.href === "/settings")
-    : navItems;
 
   useEffect(() => {
     setPendingHref(null);
@@ -34,13 +29,10 @@ export function AdminShell({
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
-      const items = forcePasswordChange
-        ? navItems.filter((item) => item.href === "/settings")
-        : navItems;
-      items.forEach((item) => router.prefetch(item.href));
+      navItems.forEach((item) => router.prefetch(item.href));
     }, 100);
     return () => window.clearTimeout(timer);
-  }, [forcePasswordChange, router]);
+  }, [router]);
 
   function handleNavigation(
     event: MouseEvent<HTMLAnchorElement>,
@@ -67,7 +59,7 @@ export function AdminShell({
           <p className="text-xs text-gray-500 mt-0.5">教育 AI 商品调查后台</p>
         </div>
         <nav className="flex gap-1 overflow-x-auto p-2 md:block md:flex-1 md:overflow-y-auto">
-          {visibleNavItems.map((item) => {
+          {navItems.map((item) => {
             const active = (pendingHref ?? pathname).startsWith(item.href);
             const pending = pendingHref === item.href;
             const Icon = item.icon;
@@ -101,11 +93,6 @@ export function AdminShell({
           aria-hidden="true"
           className={`absolute inset-x-0 top-0 h-0.5 bg-blue-600 transition-opacity ${pendingHref ? "animate-pulse opacity-100" : "opacity-0"}`}
         />
-        {forcePasswordChange && (
-          <div className="mb-4 border-l-4 border-amber-500 bg-amber-50 px-4 py-3 text-sm font-medium text-amber-900">
-            首次登录必须修改初始密码，完成后请重新登录。
-          </div>
-        )}
         {children}
       </main>
     </div>

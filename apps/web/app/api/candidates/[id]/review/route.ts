@@ -33,12 +33,7 @@ export async function POST(
   const { action, reason } = body.data;
   const result = await reviewCandidate(id, action, reason);
   if (!result.ok) {
-    const status = result.reason === "NOT_FOUND" ? 404 : 409;
-    const error =
-      result.reason === "NOT_FOUND"
-        ? "候选记录不存在"
-        : "规格尚未归一化，不能通过审核";
-    return NextResponse.json({ error }, { status });
+    return NextResponse.json({ error: "候选记录不存在" }, { status: 404 });
   }
   return NextResponse.json(result);
 }

@@ -11,7 +11,6 @@ const routeSource = readFileSync(
 
 const mocks = vi.hoisted(() => ({
   assertAdminMutation: vi.fn(),
-  authorizeAdminRequest: vi.fn(),
   getDatabase: vi.fn(),
 }));
 
@@ -21,7 +20,6 @@ vi.mock("../../../lib/database", () => ({
 
 vi.mock("../../../lib/server-auth", () => ({
   assertAdminMutation: mocks.assertAdminMutation,
-  authorizeAdminRequest: mocks.authorizeAdminRequest,
 }));
 
 import { GET, POST } from "./route.js";
@@ -71,7 +69,6 @@ describe("specs API", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.assertAdminMutation.mockResolvedValue({ ok: true });
-    mocks.authorizeAdminRequest.mockResolvedValue({ ok: true });
   });
 
   it("imports the comparison-key authority directly from the domain package", () => {

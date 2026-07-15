@@ -1,17 +1,10 @@
-import { redirect } from "next/navigation";
 import { Suspense } from "react";
-import { getCurrentAdminSession } from "../lib/server-auth";
 
-export default async function PasswordChangeGate({
+export default function PasswordChangeGate({
   children,
 }: {
   children: React.ReactNode;
 }) {
-  const session = await getCurrentAdminSession();
-  if (!session) redirect("/login");
-  if (session.forcePasswordChange) {
-    redirect("/settings?forcePasswordChange=1");
-  }
   return <Suspense fallback={<RouteLoading />}>{children}</Suspense>;
 }
 

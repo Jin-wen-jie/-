@@ -9,7 +9,10 @@ vi.mock("./database", () => ({
   getDatabase: mocks.getDatabase,
 }));
 
-import { normalizeCandidate } from "./candidate-repository.js";
+import {
+  normalizeCandidate,
+  reviewCandidate,
+} from "./candidate-repository.js";
 
 function createDatabase({
   status,
@@ -103,5 +106,49 @@ describe("candidate repository normalization", () => {
     expect(database.returning).toHaveBeenCalled();
     expect(database.insert).not.toHaveBeenCalled();
     expect(database.auditValues).not.toHaveBeenCalled();
+  });
+});
+
+describe("candidate repository review", () => {
+  it("approves a candidate without a normalized spec", async () => {
+    const limit = vi.fn().mockResolvedValue([{ id: "candidate-1" }]);
+    const selectQuery = {
+      from: vi.fn(),
+      where: vi.fn(),
+      limit,
+    };
+    selectQuery.from.mockReturnValue(selectQuery);
+    selectQuery.where.mockReturnValue(selectQuery);
+
+    const updateWhere = vi.fn().mockResolvedValue(undefined);
+    const updateSet = vi.fn().mockReturnValue({ where: updateWhere });
+    const auditValues = vi.fn().mockResolvedValue(undefined);
+    const tx = {
+      select: vi.fn().mockReturnValue(selectQuery),
+      update: vi.fn().mockReturnValue({ set: updateSet }),
+      insert: vi.fn().mockReturnValue({ values: auditValues }),
+    };
+    mocks.getDatabase.mockReturnValue({
+      transaction: vi.fn(
+        async (callback: (transaction: typeof tx) => unknown) => callback(tx),
+      ),
+    });
+
+    await expect(
+      reviewCandidate("candidate-1", "approve"),
+    ).resolves.toMatchObject({
+      ok: true,
+      id: "candidate-1",
+      status: "APPROVED",
+    });
+    expect(updateSet).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "APPROVED" }),
+    );
+    expect(auditValues).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "candidate.approve",
+        candidateId: "candidate-1",
+      }),
+    );
   });
 });

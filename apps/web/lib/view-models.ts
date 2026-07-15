@@ -51,19 +51,3 @@ export function connectorLabel(
       return "运行错误";
   }
 }
-
-export interface AdminPageContext {
-  forcePasswordChange: boolean;
-}
-
-export function canAccessAdminPage(
-  ctx: AdminPageContext,
-  pathname: string,
-): boolean {
-  const isSettingsPage =
-    pathname === "/settings" || pathname.startsWith("/settings/");
-  if (ctx.forcePasswordChange && !isSettingsPage) {
-    return false;
-  }
-  return true;
-}

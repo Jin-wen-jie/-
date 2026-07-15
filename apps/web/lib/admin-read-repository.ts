@@ -1,4 +1,4 @@
-import { and, eq, gte, sql } from "drizzle-orm";
+import { desc, eq, sql } from "drizzle-orm";
 import {
   discoveryCandidates,
   discoveryEvents,
@@ -7,62 +7,35 @@ import {
   productSpecs,
   watchSources,
 } from "@compare/db";
-import { toRankingView, type RankingView } from "./admin-read-model";
+import {
+  toApprovedCandidateRankingView,
+  type RankingView,
+} from "./admin-read-model";
 import { getDatabase } from "./database";
 
 export async function listRankingViews(limit = 200): Promise<RankingView[]> {
   const db = getDatabase();
-  const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1_000);
   const boundedLimit = Number.isFinite(limit)
     ? Math.min(500, Math.max(1, Math.floor(limit)))
     : 200;
-  const unitPrice = sql`${listings.convertedPriceCny} / greatest(${listings.bundleQty} * ${listings.minBundleCount}, 1)`;
   const rows = await db
     .select({
-      id: listings.id,
-      provider: productSpecs.provider,
-      productLine: productSpecs.productLine,
-      plan: productSpecs.plan,
-      delivery: productSpecs.delivery,
-      merchantName: merchants.name,
-      merchantUrl: merchants.homepageUrl,
-      originalUrl: listings.originalUrl,
-      sourceUrl: discoveryEvents.sourceUrl,
-      originalPrice: listings.originalPrice,
-      currency: listings.currency,
-      convertedPriceCny: listings.convertedPriceCny,
-      bundleQty: listings.bundleQty,
-      minBundleCount: listings.minBundleCount,
-      stockEvidence: listings.stockEvidence,
-      lastVerifiedAt: listings.lastVerifiedAt,
+      id: discoveryCandidates.id,
+      productUrl: discoveryCandidates.productUrl,
+      extractionResult: discoveryCandidates.extractionResult,
+      eventSourceUrl: discoveryEvents.sourceUrl,
+      createdAt: discoveryCandidates.createdAt,
     })
-    .from(listings)
-    .innerJoin(merchants, eq(listings.merchantId, merchants.id))
-    .innerJoin(productSpecs, eq(listings.specId, productSpecs.id))
-    .innerJoin(
-      discoveryCandidates,
-      eq(listings.candidateId, discoveryCandidates.id),
-    )
+    .from(discoveryCandidates)
     .leftJoin(
       discoveryEvents,
       eq(discoveryCandidates.discoveryEventId, discoveryEvents.id),
     )
-    .where(
-      and(
-        eq(listings.approved, true),
-        eq(listings.status, "ACTIVE"),
-        gte(listings.lastVerifiedAt, cutoff),
-      ),
-    )
-    .orderBy(sql`${unitPrice} asc nulls last`)
+    .where(eq(discoveryCandidates.status, "APPROVED"))
+    .orderBy(desc(discoveryCandidates.updatedAt))
     .limit(boundedLimit);
 
-  return rows
-    .filter(
-      (row): row is typeof row & { lastVerifiedAt: Date } =>
-        row.lastVerifiedAt !== null,
-    )
-    .map(toRankingView);
+  return rows.map(toApprovedCandidateRankingView);
 }
 
 export async function getDashboardCounts() {
@@ -70,8 +43,8 @@ export async function getDashboardCounts() {
   const [counts] = await db
     .select({
       candidates: sql<number>`(select count(*)::int from ${discoveryCandidates})`,
-      merchants: sql<number>`(select count(*)::int from ${merchants})`,
-      listings: sql<number>`(select count(*)::int from ${listings})`,
+      merchants: sql<number>`(select count(distinct ${discoveryCandidates.extractionResult} ->> 'merchantName')::int from ${discoveryCandidates} where ${discoveryCandidates.status} = 'APPROVED')`,
+      listings: sql<number>`(select count(*)::int from ${discoveryCandidates} where ${discoveryCandidates.status} = 'APPROVED')`,
     })
     .from(sql`(select 1) as singleton`);
   return {

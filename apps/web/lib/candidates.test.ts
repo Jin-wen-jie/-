@@ -29,20 +29,10 @@ export function createManualCandidate(params: {
   };
 }
 
-export class SpecIncompleteError extends Error {
-  constructor() {
-    super("SPEC_INCOMPLETE");
-    this.name = "SpecIncompleteError";
-  }
-}
-
-export function approveCandidate(candidate: {
+export function approveCandidate(_candidate: {
   id: string;
   comparisonKey: string | null;
 }): { status: "APPROVED" } {
-  if (!candidate.comparisonKey) {
-    throw new SpecIncompleteError();
-  }
   return { status: "APPROVED" };
 }
 
@@ -58,13 +48,12 @@ describe("candidate workflow", () => {
     });
   });
 
-  it("requires a complete normalized spec before approval", async () => {
-    await expect(
-      (async () =>
-        approveCandidate({
-          id: "candidate-1",
-          comparisonKey: null,
-        }))(),
-    ).rejects.toThrow(SpecIncompleteError);
+  it("allows approval without manual spec normalization", () => {
+    expect(
+      approveCandidate({
+        id: "candidate-1",
+        comparisonKey: null,
+      }),
+    ).toEqual({ status: "APPROVED" });
   });
 });

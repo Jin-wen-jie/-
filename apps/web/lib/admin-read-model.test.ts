@@ -8,7 +8,10 @@ vi.mock("./database", () => ({
   getDatabase: mocks.getDatabase,
 }));
 
-import { toRankingView } from "./admin-read-model.js";
+import {
+  toApprovedCandidateRankingView,
+  toRankingView,
+} from "./admin-read-model.js";
 import { getDashboardCounts } from "./admin-read-repository.js";
 
 describe("admin read model", () => {
@@ -53,6 +56,37 @@ describe("admin read model", () => {
       productUrl: "https://shop.example/item/1",
       sourceUrl: "https://x.com/example/status/1",
       merchantUrl: "https://shop.example/",
+    });
+  });
+
+  it("maps an approved candidate directly into the dashboard", () => {
+    expect(
+      toApprovedCandidateRankingView({
+        id: "candidate-1",
+        productUrl: "https://shop.example/item/1",
+        extractionResult: {
+          price: 0.85,
+          merchantName: "公开商铺",
+          focus: "K12",
+          availability: "IN_STOCK",
+          inventory: 12,
+          observedAt: "2026-07-14T19:25:00.000Z",
+        },
+        eventSourceUrl: "https://source.example/post/1",
+        createdAt: new Date("2026-07-14T18:00:00.000Z"),
+      }),
+    ).toMatchObject({
+      id: "candidate-1",
+      spec: "K12",
+      merchant: "公开商铺",
+      price: "CNY 0.85",
+      totalCny: "¥0.85",
+      unitCny: "¥0.85/件",
+      supplyEvidence: "IN_STOCK · 库存 12",
+      productUrl: "https://shop.example/item/1",
+      sourceUrl: "https://source.example/post/1",
+      merchantUrl: "https://shop.example/",
+      lastVerified: "2026-07-14T19:25:00.000Z",
     });
   });
 
