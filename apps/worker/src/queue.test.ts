@@ -22,7 +22,7 @@ describe("worker queue configuration", () => {
     expect(boss.createQueue).toHaveBeenCalledTimes(4);
     expect(boss.schedule).toHaveBeenCalledWith(
       QUEUES.DISCOVER_SOURCE,
-      "*/30 * * * *",
+      "*/10 * * * *",
       { kind: "sweep" },
     );
     expect(boss.schedule).toHaveBeenCalledWith(

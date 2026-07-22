@@ -15,7 +15,7 @@ export interface QueueConfig {
 export const DEFAULT_SCHEDULE: QueueConfig[] = [
   {
     queueName: QUEUES.DISCOVER_SOURCE,
-    cron: "*/30 * * * *",
+    cron: "*/10 * * * *",
     enabled: true,
   },
   {

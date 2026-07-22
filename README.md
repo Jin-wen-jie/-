@@ -145,13 +145,13 @@ $env:PGPASSWORD = "你的 postgres 密码"
 
 ## 免费公网部署
 
-推荐使用 Vercel Hobby 托管持续可访问的 Web，Supabase 托管数据库，GitHub Actions 每 3 小时启动一次有界采集任务。Render 和 Northflank 不再作为推荐的最终方案；下方 Docker Compose 仍保留为可选服务器部署方式。
+推荐使用 Vercel Hobby 托管持续可访问的 Web，Supabase 托管数据库，GitHub Actions 每 10 分钟启动一次有界采集任务。Render 和 Northflank 不再作为推荐的最终方案；下方 Docker Compose 仍保留为可选服务器部署方式。
 
 ### 1. 架构
 
 - GitHub `main` -> Vercel Hobby Web：`main` 分支更新后构建并部署 Next.js 管理后台。
 - Supabase PostgreSQL：同时供 Web 和采集任务读写持久数据。
-- GitHub Actions `Public web collection`：每 3 小时运行 Bing RSS，并并行调用已配置的 Brave、Google、Serper 搜索；随后启动临时 Validator 和 one-shot Worker 验证新候选，任务结束后退出。
+- GitHub Actions `Public web collection`：每 10 分钟运行 Bing RSS，并并行调用已配置的 Brave、Google、Serper 搜索；随后启动临时 Validator 和 one-shot Worker 验证新候选，任务结束后退出。
 
 ### 2. 配置 Supabase Production 连接
 
@@ -198,7 +198,7 @@ Preview 默认不连接生产数据库，并绝不复用 Production Secret。若
 
 #### 采集计划与手动触发
 
-- workflow cron 为 `0 */3 * * *`。GitHub 计划任务可能延迟，不保证整点启动。
+- workflow cron 为 `*/10 * * * *`。GitHub 计划任务可能延迟，不保证准点启动。
 - collect job 的最终硬上限为 30 分钟；`WORKER_DEADLINE_MS=1500000` 是 25 分钟软截止，到点后 Worker 停止领取或启动新实体，已启动实体允许有界收尾。每次最多处理 50 个候选项 + 50 个货源链接，并发数 4。
 - 需要立即采集或验证配置时，使用路径 `Actions -> Public web collection -> Run workflow` 手动触发。
 

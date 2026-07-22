@@ -61,7 +61,7 @@ describe("hourly collection workflow", () => {
         "apps/worker/**",
       ],
     });
-    expect(workflow.on.schedule).toEqual([{ cron: "*/5 * * * *" }]);
+    expect(workflow.on.schedule).toEqual([{ cron: "*/10 * * * *" }]);
     expect(workflow.on).toHaveProperty("workflow_dispatch");
     expect(workflow.permissions).toEqual({ contents: "read" });
     expect(workflow.concurrency).toEqual({

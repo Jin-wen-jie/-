@@ -124,7 +124,7 @@ export default async function JobsPage() {
       <DataTable columns={alertColumns} rows={alerts} getRowKey={(row) => row.id} />
       <p className="mt-4 text-xs leading-relaxed text-gray-500">
         Bing RSS 默认启用；Brave、Google 和 Serper 可通过部署密钥扩展覆盖范围。
-        搜索每 5 分钟执行一次，单个引擎限流或失败时继续使用其他引擎，不抓取登录墙或验证码页面。
+        搜索每 10 分钟执行一次，单个引擎限流或失败时继续使用其他引擎，不抓取登录墙或验证码页面。
       </p>
     </div>
   );
